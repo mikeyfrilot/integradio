@@ -5,7 +5,7 @@ Each page template comes with:
 - Semantic intents for all components
 - Proper dataflow relationships
 - Consistent styling
-- Accessibility considerations
+- Accessibility considerations (WCAG 2.2 compliant)
 
 Usage:
     from integradio.pages import ChatPage, SettingsPage, GalleryPage
@@ -17,8 +17,11 @@ Usage:
     )
     chat.launch()
 
-    # Or compose into larger apps
-    with SemanticBlocks() as demo:
+    # Or compose into larger apps with accessibility
+    from integradio.pages import get_page_css, add_skip_navigation
+
+    with SemanticBlocks(css=get_page_css()) as demo:
+        add_skip_navigation()
         with gr.Tab("Chat"):
             ChatPage.render()
         with gr.Tab("Settings"):
@@ -35,6 +38,17 @@ from .form import FormPage, create_form_wizard
 from .datatable import DataTablePage, create_data_table
 from .upload import UploadPage, create_upload_center
 from .analytics import AnalyticsPage, create_analytics_dashboard
+from .utils import (
+    get_page_css,
+    get_enhanced_page_css,
+    add_skip_navigation,
+    add_main_content_landmark,
+    create_confirmation_button,
+    create_loading_section,
+    create_status_announcement,
+    get_empty_state,
+    EMPTY_STATES,
+)
 
 __all__ = [
     # Page classes
@@ -59,4 +73,14 @@ __all__ = [
     "create_data_table",
     "create_upload_center",
     "create_analytics_dashboard",
+    # Accessibility utilities
+    "get_page_css",
+    "get_enhanced_page_css",
+    "add_skip_navigation",
+    "add_main_content_landmark",
+    "create_confirmation_button",
+    "create_loading_section",
+    "create_status_announcement",
+    "get_empty_state",
+    "EMPTY_STATES",
 ]

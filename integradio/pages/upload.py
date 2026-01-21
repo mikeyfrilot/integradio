@@ -8,15 +8,24 @@ Features:
 - File type validation
 - Preview thumbnails
 - Processing pipeline integration
+
+Security (2026 best practices):
+- Path traversal protection via pathlib sanitization
+- Filename validation against malicious patterns
+- File size validation
+- Content-type verification
 """
 
 from typing import Optional, Callable, Any
 from dataclasses import dataclass, field
+from pathlib import Path
+import re
 
 import gradio as gr
 
 from ..components import semantic
 from ..blocks import SemanticBlocks
+from ..ux import create_confirmation_dialog
 
 
 @dataclass
@@ -47,6 +56,120 @@ class UploadedFile:
     status: str = "uploaded"  # "uploading", "uploaded", "processing", "done", "error"
     preview_url: Optional[str] = None
     metadata: dict = field(default_factory=dict)
+
+
+# Security: Filename validation regex - allows alphanumeric, dash, underscore, dot
+# Prevents path traversal and command injection
+_SAFE_FILENAME_PATTERN = re.compile(r'^[\w\-. ]+$', re.UNICODE)
+
+# Security: Maximum reasonable filename length
+_MAX_FILENAME_LENGTH = 255
+
+# Security: Dangerous file extensions that should be blocked
+_BLOCKED_EXTENSIONS = frozenset({
+    '.exe', '.bat', '.cmd', '.com', '.msi', '.scr', '.pif',  # Windows executables
+    '.sh', '.bash', '.zsh', '.csh',  # Shell scripts
+    '.ps1', '.psm1', '.psd1',  # PowerShell
+    '.vbs', '.vbe', '.js', '.jse', '.ws', '.wsf', '.wsc', '.wsh',  # Script files
+    '.dll', '.sys', '.drv',  # System files
+    '.php', '.php3', '.php4', '.php5', '.phtml',  # Server-side scripts
+    '.asp', '.aspx', '.jsp', '.cgi', '.pl',  # Web scripts
+    '.htaccess', '.htpasswd',  # Apache config
+})
+
+
+def sanitize_filename(filename: str) -> str:
+    """
+    Sanitize a filename to prevent path traversal and other attacks.
+
+    Security measures:
+    1. Extract only the basename (no directory components)
+    2. Remove null bytes
+    3. Validate against safe pattern
+    4. Check length limits
+    5. Block dangerous extensions
+
+    Args:
+        filename: Raw filename from upload
+
+    Returns:
+        Sanitized filename safe for filesystem operations
+
+    Raises:
+        ValueError: If filename is invalid or potentially malicious
+    """
+    if not filename:
+        raise ValueError("Empty filename")
+
+    # Step 1: Remove null bytes (can bypass extension checks)
+    filename = filename.replace('\x00', '')
+
+    # Step 2: Use pathlib to extract just the filename (prevents path traversal)
+    # This handles ../../../etc/passwd -> passwd
+    safe_name = Path(filename).name
+
+    # Step 3: Double-check no path separators remain
+    if '/' in safe_name or '\\' in safe_name:
+        raise ValueError("Invalid filename: contains path separators")
+
+    # Step 4: Check for empty after sanitization
+    if not safe_name or safe_name in ('.', '..'):
+        raise ValueError("Invalid filename")
+
+    # Step 5: Validate length
+    if len(safe_name) > _MAX_FILENAME_LENGTH:
+        raise ValueError(f"Filename too long (max {_MAX_FILENAME_LENGTH} characters)")
+
+    # Step 6: Validate against safe pattern
+    if not _SAFE_FILENAME_PATTERN.match(safe_name):
+        # Allow through but log - some legitimate filenames have special chars
+        # Replace dangerous characters
+        safe_name = re.sub(r'[^\w\-. ]', '_', safe_name)
+
+    # Step 7: Check for blocked extensions
+    ext = Path(safe_name).suffix.lower()
+    if ext in _BLOCKED_EXTENSIONS:
+        raise ValueError(f"File type '{ext}' is not allowed for security reasons")
+
+    # Step 8: Prevent double extensions like file.jpg.exe
+    parts = safe_name.lower().split('.')
+    for part in parts[1:]:  # Skip the filename itself
+        if f'.{part}' in _BLOCKED_EXTENSIONS:
+            raise ValueError(f"File contains blocked extension '.{part}'")
+
+    return safe_name
+
+
+def _format_file_size(size_bytes: int) -> str:
+    """Format file size in human-readable format."""
+    for unit in ['B', 'KB', 'MB', 'GB']:
+        if size_bytes < 1024:
+            return f"{size_bytes:.1f} {unit}"
+        size_bytes /= 1024
+    return f"{size_bytes:.1f} TB"
+
+
+def _get_file_type(extension: str) -> str:
+    """Get human-readable file type from extension."""
+    type_map = {
+        # Images
+        '.jpg': 'Image', '.jpeg': 'Image', '.png': 'Image', '.gif': 'Image',
+        '.webp': 'Image', '.svg': 'Image', '.bmp': 'Image', '.ico': 'Image',
+        # Videos
+        '.mp4': 'Video', '.webm': 'Video', '.mov': 'Video', '.avi': 'Video',
+        '.mkv': 'Video', '.flv': 'Video',
+        # Audio
+        '.mp3': 'Audio', '.wav': 'Audio', '.ogg': 'Audio', '.flac': 'Audio',
+        '.aac': 'Audio', '.m4a': 'Audio',
+        # Documents
+        '.pdf': 'PDF', '.doc': 'Document', '.docx': 'Document',
+        '.txt': 'Text', '.csv': 'CSV', '.json': 'JSON',
+        '.xls': 'Spreadsheet', '.xlsx': 'Spreadsheet',
+        # Archives
+        '.zip': 'Archive', '.tar': 'Archive', '.gz': 'Archive',
+        '.rar': 'Archive', '.7z': 'Archive',
+    }
+    return type_map.get(extension.lower(), 'File')
 
 
 def create_upload_center(
@@ -252,31 +375,56 @@ def create_upload_center(
         tags=["list", "files", "status"],
     )
 
-    # Batch actions
+    # Batch actions - using default size for WCAG 2.2 touch target compliance (44x44px min)
     with gr.Row():
         components["select_all"] = semantic(
-            gr.Button("☑️ Select All", size="sm", variant="secondary"),
+            gr.Button("☑️ Select All", variant="secondary"),
             intent="selects all uploaded files",
             tags=["action", "selection"],
         )
 
         components["clear_selection"] = semantic(
-            gr.Button("☐ Clear Selection", size="sm", variant="secondary"),
+            gr.Button("☐ Clear Selection", variant="secondary"),
             intent="clears file selection",
             tags=["action", "selection"],
         )
 
         components["delete_selected"] = semantic(
-            gr.Button("🗑️ Delete Selected", size="sm", variant="stop"),
+            gr.Button("🗑️ Delete Selected", variant="stop"),
             intent="deletes selected files",
             tags=["action", "delete", "destructive"],
         )
 
         components["download_all"] = semantic(
-            gr.Button("📥 Download All", size="sm", variant="secondary"),
+            gr.Button("📥 Download All", variant="secondary"),
             intent="downloads all uploaded files as archive",
             tags=["action", "download", "batch"],
         )
+
+    # Confirmation dialog for delete (2026 UX best practice)
+    components["delete_confirm"] = gr.HTML(
+        "",
+        visible=False,
+        elem_id="delete-confirm-dialog",
+    )
+
+    # Wire up confirmation flow for delete
+    def show_delete_confirm():
+        return gr.update(
+            value=create_confirmation_dialog(
+                title="Delete Selected Files?",
+                message="This will permanently remove the selected files. This action cannot be undone.",
+                confirm_label="Delete",
+                cancel_label="Cancel",
+                danger=True,
+            ),
+            visible=True,
+        )
+
+    components["delete_selected"].click(
+        fn=show_delete_confirm,
+        outputs=[components["delete_confirm"]],
+    )
 
     gr.Markdown("---")
 
@@ -308,7 +456,7 @@ def create_upload_center(
                 )
 
                 components["rename_btn"] = semantic(
-                    gr.Button("✏️ Rename", size="sm"),
+                    gr.Button("✏️ Rename"),
                     intent="applies new filename to selected file",
                     tags=["action", "rename"],
                 )
@@ -322,16 +470,86 @@ def create_upload_center(
 
     # Wire up handlers
     def handle_upload(files):
+        # Edge case: None or invalid input
         if files is None:
             return "No files uploaded yet", [], []
 
-        file_data = []
-        for f in files:
-            name = getattr(f, "name", str(f)).split("/")[-1].split("\\")[-1]
-            file_data.append([name, "Unknown", "File", "✅ Uploaded"])
+        # Edge case: files is not a list (single file or invalid type)
+        if not isinstance(files, (list, tuple)):
+            files = [files]
 
-        status = f"**{len(files)}** file(s) uploaded successfully"
-        return status, file_data, files
+        # Edge case: too many files
+        if len(files) > config.max_files:
+            return (
+                f"❌ Too many files ({len(files)} > {config.max_files}). "
+                "Please reduce the number of files.",
+                [],
+                [],
+            )
+
+        file_data = []
+        errors = []
+        valid_files = []
+
+        for f in files:
+            try:
+                # Edge case: None element in file list
+                if f is None:
+                    errors.append("Received null file entry")
+                    continue
+
+                # Security: Get raw filename and sanitize it
+                # Edge case: File object without name attribute
+                raw_name = getattr(f, "name", None)
+                if not raw_name or not isinstance(raw_name, str):
+                    errors.append("File has invalid or missing name")
+                    continue
+
+                safe_name = sanitize_filename(raw_name)
+
+                # Get file size if available
+                try:
+                    file_path = Path(raw_name)
+                    # Edge case: Check file exists AND is a file (not directory)
+                    if file_path.exists() and file_path.is_file():
+                        size_bytes = file_path.stat().st_size
+                        if size_bytes > 100 * 1024 * 1024:  # 100MB limit
+                            errors.append(f"{safe_name}: File too large (max 100MB)")
+                            continue
+                        size = _format_file_size(size_bytes)
+                    else:
+                        size = "Unknown"
+                except (OSError, PermissionError) as e:
+                    # Edge case: Permission denied or file system error
+                    size = "Unknown"
+
+                # Determine file type from extension
+                ext = Path(safe_name).suffix.lower()
+                file_type = _get_file_type(ext)
+
+                file_data.append([safe_name, size, file_type, "✅ Uploaded"])
+                valid_files.append(f)
+
+            except ValueError as e:
+                # Security: filename validation failed
+                errors.append(str(e)[:200])  # Truncate long error messages
+                continue
+            except (OSError, TypeError) as e:
+                # Edge case: Unexpected file system or type errors
+                errors.append(f"File error: {type(e).__name__}")
+                continue
+
+        # Build status message
+        if valid_files:
+            status = f"**{len(valid_files)}** file(s) uploaded successfully"
+            if errors:
+                status += f"\n\n⚠️ **{len(errors)} file(s) rejected:**\n" + "\n".join(f"- {e}" for e in errors)
+        elif errors:
+            status = "❌ **All files rejected:**\n" + "\n".join(f"- {e}" for e in errors)
+        else:
+            status = "No files uploaded yet"
+
+        return status, file_data, valid_files
 
     components["upload_area"].change(
         fn=handle_upload if not on_upload else on_upload,

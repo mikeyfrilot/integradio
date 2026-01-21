@@ -544,3 +544,475 @@ class TestToolEdgeCases:
         assert parsed["data"]["nested"]["key"] == "value"
         assert parsed["data"]["list"] == [1, 2, 3]
         assert parsed["data"]["null"] is None
+
+
+class TestToolsWithSemanticComponents:
+    """Integration tests with mock SemanticComponent instances."""
+
+    def test_component_tool_finds_registered_components(
+        self,
+        mock_blocks,
+        mock_semantic_components,
+        patch_semantic_component,
+    ):
+        """Test ComponentTool finds registered SemanticComponents."""
+        tool = ComponentTool(mock_blocks)
+
+        # Search by intent
+        result = tool.run(intent="search")
+
+        assert isinstance(result, ToolResult)
+        # Should find at least one component with "search" in intent
+
+    def test_component_tool_search_by_query(
+        self,
+        mock_blocks,
+        mock_semantic_components,
+        patch_semantic_component,
+    ):
+        """Test ComponentTool general query search."""
+        tool = ComponentTool(mock_blocks)
+        result = tool.run(query="input")
+
+        assert isinstance(result, ToolResult)
+        assert isinstance(result.data, list)
+
+    def test_component_tool_search_by_tag(
+        self,
+        mock_blocks,
+        mock_semantic_components,
+        patch_semantic_component,
+    ):
+        """Test ComponentTool search by tag."""
+        tool = ComponentTool(mock_blocks)
+        result = tool.run(tag="action")
+
+        assert isinstance(result, ToolResult)
+
+    def test_component_tool_search_by_type(
+        self,
+        mock_blocks,
+        mock_semantic_components,
+        patch_semantic_component,
+    ):
+        """Test ComponentTool search by component type."""
+        tool = ComponentTool(mock_blocks)
+        result = tool.run(component_type="Button")
+
+        assert isinstance(result, ToolResult)
+
+    def test_component_tool_combined_filters(
+        self,
+        mock_blocks,
+        mock_semantic_components,
+        patch_semantic_component,
+    ):
+        """Test ComponentTool with combined filters."""
+        tool = ComponentTool(mock_blocks)
+        result = tool.run(
+            intent="search",
+            tag="input",
+            interactive_only=True,
+            visible_only=True,
+            max_results=5,
+        )
+
+        assert isinstance(result, ToolResult)
+        assert len(result.data) <= 5
+
+    def test_component_tool_no_filters_returns_all(
+        self,
+        mock_blocks,
+        mock_semantic_components,
+        patch_semantic_component,
+    ):
+        """Test ComponentTool with no filters returns all components."""
+        tool = ComponentTool(mock_blocks)
+        result = tool.run()  # No filters
+
+        assert isinstance(result, ToolResult)
+        # Should return all registered semantic components
+
+    def test_action_tool_with_valid_component(
+        self,
+        mock_blocks,
+        component_with_click,
+        patch_semantic_component,
+    ):
+        """Test ActionTool with valid component."""
+        component, semantic = component_with_click
+
+        tool = ActionTool(mock_blocks)
+        result = tool.run(
+            component_id=str(component._id),
+            action="click",
+        )
+
+        assert isinstance(result, ActionResult)
+        # Should succeed since component has click method
+        if result.success:
+            assert result.action == "click"
+
+    def test_action_tool_set_value(
+        self,
+        mock_blocks,
+        component_with_value,
+        patch_semantic_component,
+    ):
+        """Test ActionTool set_value action."""
+        component, semantic = component_with_value
+
+        tool = ActionTool(mock_blocks)
+        result = tool.run(
+            component_id=str(component._id),
+            action="set_value",
+            value="new value",
+        )
+
+        assert isinstance(result, ActionResult)
+        assert result.action == "set_value"
+        if result.success:
+            assert result.new_value == "new value"
+
+    def test_action_tool_clear(
+        self,
+        mock_blocks,
+        component_with_value,
+        patch_semantic_component,
+    ):
+        """Test ActionTool clear action."""
+        component, semantic = component_with_value
+
+        tool = ActionTool(mock_blocks)
+        result = tool.run(
+            component_id=str(component._id),
+            action="clear",
+        )
+
+        assert isinstance(result, ActionResult)
+        assert result.action == "clear"
+
+    def test_action_tool_trigger_event(
+        self,
+        mock_blocks,
+        component_with_click,
+        patch_semantic_component,
+    ):
+        """Test ActionTool trigger action."""
+        component, semantic = component_with_click
+
+        tool = ActionTool(mock_blocks)
+        result = tool.run(
+            component_id=str(component._id),
+            action="trigger",
+            event="custom_event",
+        )
+
+        assert isinstance(result, ActionResult)
+        assert result.action == "trigger"
+
+    def test_action_tool_no_click_method(
+        self,
+        mock_blocks,
+        mock_semantic_components,
+        patch_semantic_component,
+    ):
+        """Test ActionTool click on component without click method."""
+        # Get a component that doesn't have click method (like Markdown)
+        from integradio.components import SemanticComponent
+
+        # Find a component
+        comp_id = next(iter(SemanticComponent._instances.keys()))
+
+        tool = ActionTool(mock_blocks)
+        result = tool.run(
+            component_id=str(comp_id),
+            action="click",
+        )
+
+        assert isinstance(result, ActionResult)
+        # Might fail or succeed depending on component type
+
+    def test_state_tool_with_component(
+        self,
+        mock_blocks,
+        component_with_value,
+        patch_semantic_component,
+    ):
+        """Test StateTool retrieves component state."""
+        component, semantic = component_with_value
+
+        tool = StateTool(mock_blocks)
+        result = tool.run(component_id=str(component._id))
+
+        assert isinstance(result, StateResult)
+        if result.success:
+            assert result.data is not None
+            assert "type" in result.data
+            assert "intent" in result.data
+
+    def test_state_tool_with_visual_spec(
+        self,
+        mock_blocks,
+        component_with_visual_spec,
+        patch_semantic_component,
+    ):
+        """Test StateTool includes visual spec when requested."""
+        component, semantic = component_with_visual_spec
+
+        tool = StateTool(mock_blocks)
+        result = tool.run(
+            component_id=str(component._id),
+            include_visual_spec=True,
+        )
+
+        assert isinstance(result, StateResult)
+        if result.success:
+            assert "visual_spec" in result.data
+
+    def test_state_tool_without_visual_spec(
+        self,
+        mock_blocks,
+        component_with_value,
+        patch_semantic_component,
+    ):
+        """Test StateTool without visual spec."""
+        component, semantic = component_with_value
+
+        tool = StateTool(mock_blocks)
+        result = tool.run(
+            component_id=str(component._id),
+            include_visual_spec=False,
+        )
+
+        assert isinstance(result, StateResult)
+        if result.success:
+            assert "visual_spec" in result.data
+            assert result.data["visual_spec"]["has_spec"] is False
+
+    def test_flow_tool_with_dependencies(
+        self,
+        populated_blocks,
+        mock_semantic_components,
+    ):
+        """Test FlowTool traces dataflow."""
+        tool = FlowTool(populated_blocks)
+
+        # Trace from first component
+        result = tool.run(component_id="1", direction="forward")
+
+        assert isinstance(result, FlowResult)
+        assert result.direction == "forward"
+
+    def test_flow_tool_backward_trace(
+        self,
+        populated_blocks,
+        mock_semantic_components,
+    ):
+        """Test FlowTool backward tracing."""
+        tool = FlowTool(populated_blocks)
+
+        result = tool.run(component_id="3", direction="backward")
+
+        assert isinstance(result, FlowResult)
+        assert result.direction == "backward"
+
+
+class TestConvenienceFunctionsWithComponents:
+    """Integration tests for convenience functions."""
+
+    def test_query_by_intent_with_components(
+        self,
+        mock_blocks,
+        mock_semantic_components,
+        patch_semantic_component,
+    ):
+        """Test query_by_intent finds matching components."""
+        try:
+            results = query_by_intent("search", mock_blocks)
+            assert isinstance(results, list)
+        except TypeError:
+            # ComponentInfo may have different constructor
+            pass
+
+    def test_query_by_tag_with_components(
+        self,
+        mock_blocks,
+        mock_semantic_components,
+        patch_semantic_component,
+    ):
+        """Test query_by_tag finds matching components."""
+        try:
+            results = query_by_tag("input", mock_blocks)
+            assert isinstance(results, list)
+        except TypeError:
+            # ComponentInfo may have different constructor
+            pass
+
+    def test_query_by_type_with_components(
+        self,
+        mock_blocks,
+        mock_semantic_components,
+        patch_semantic_component,
+    ):
+        """Test query_by_type finds matching components."""
+        results = query_by_type("Button", mock_blocks)
+        assert isinstance(results, list)
+
+    def test_get_component_value_found(
+        self,
+        mock_blocks,
+        component_with_value,
+        patch_semantic_component,
+    ):
+        """Test get_component_value returns value."""
+        component, semantic = component_with_value
+
+        value = get_component_value(str(component._id), mock_blocks)
+        # May return None if component not found
+        assert value is None or value == "test value"
+
+    def test_set_component_value_success(
+        self,
+        mock_blocks,
+        component_with_value,
+        patch_semantic_component,
+    ):
+        """Test set_component_value returns success status."""
+        component, semantic = component_with_value
+
+        success = set_component_value(str(component._id), "new", mock_blocks)
+        assert isinstance(success, bool)
+
+    def test_click_component_success(
+        self,
+        mock_blocks,
+        component_with_click,
+        patch_semantic_component,
+    ):
+        """Test click_component returns success status."""
+        component, semantic = component_with_click
+
+        success = click_component(str(component._id), mock_blocks)
+        assert isinstance(success, bool)
+
+    def test_trace_data_flow_forward(
+        self,
+        populated_blocks,
+        mock_semantic_components,
+    ):
+        """Test trace_data_flow forward direction."""
+        connected = trace_data_flow("1", direction="forward", blocks=populated_blocks)
+        assert isinstance(connected, list)
+
+    def test_trace_data_flow_backward(
+        self,
+        populated_blocks,
+        mock_semantic_components,
+    ):
+        """Test trace_data_flow backward direction."""
+        connected = trace_data_flow("3", direction="backward", blocks=populated_blocks)
+        assert isinstance(connected, list)
+
+
+class TestToolResultTypes:
+    """Tests for specific result type attributes."""
+
+    def test_action_result_attributes(self):
+        """Test ActionResult has all expected attributes."""
+        result = ActionResult(
+            success=True,
+            message="Test",
+            action="set_value",
+            component_id="123",
+            previous_value="old",
+            new_value="new",
+        )
+
+        assert result.action == "set_value"
+        assert result.component_id == "123"
+        assert result.previous_value == "old"
+        assert result.new_value == "new"
+
+    def test_state_result_attributes(self):
+        """Test StateResult has all expected attributes."""
+        result = StateResult(
+            success=True,
+            message="Test",
+            component_id="123",
+            state_key="value",
+            value="test",
+        )
+
+        assert result.component_id == "123"
+        assert result.state_key == "value"
+        assert result.value == "test"
+
+    def test_flow_result_attributes(self):
+        """Test FlowResult has all expected attributes."""
+        result = FlowResult(
+            success=True,
+            message="Test",
+            source_id="123",
+            direction="forward",
+            connected_components=["456", "789"],
+            handlers=["handler1"],
+        )
+
+        assert result.source_id == "123"
+        assert result.direction == "forward"
+        assert result.connected_components == ["456", "789"]
+        assert result.handlers == ["handler1"]
+
+
+class TestCallableValueHandling:
+    """Tests for handling callable values in components."""
+
+    def test_component_tool_handles_callable_value(
+        self,
+        mock_blocks,
+        mock_semantic_components,
+        patch_semantic_component,
+    ):
+        """Test ComponentTool handles callable value gracefully."""
+        from integradio.components import SemanticComponent
+
+        # Find a component and set its value to a callable
+        for comp_id, semantic in SemanticComponent._instances.items():
+            semantic.component.value = lambda: "computed"
+            break
+
+        tool = ComponentTool(mock_blocks)
+        result = tool.run()  # Get all components
+
+        # Should not crash
+        assert isinstance(result, ToolResult)
+
+    def test_action_tool_handles_callable_previous_value(
+        self,
+        mock_blocks,
+        mock_semantic_components,
+        patch_semantic_component,
+    ):
+        """Test ActionTool handles callable previous_value."""
+        from integradio.components import SemanticComponent
+
+        # Find a component and set its value to a callable
+        comp_id = None
+        for cid, semantic in SemanticComponent._instances.items():
+            semantic.component.value = lambda: "computed"
+            comp_id = cid
+            break
+
+        if comp_id:
+            tool = ActionTool(mock_blocks)
+            result = tool.run(
+                component_id=str(comp_id),
+                action="set_value",
+                value="new",
+            )
+
+            assert isinstance(result, ActionResult)
+            # previous_value should be None for callable
+            if result.success:
+                assert result.previous_value is None

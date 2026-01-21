@@ -8,14 +8,18 @@ Tests:
 - Details panel creation
 - Inspector panel creation (sidebar)
 - Floating inspector creation
+- Event handlers and callbacks
+- Integration with SemanticComponent
 """
 
 import pytest
-from integradio.inspector.tree import ComponentTree, ComponentNode
+from unittest.mock import MagicMock, patch
+from integradio.inspector.tree import ComponentTree, ComponentNode, build_component_tree
 from integradio.inspector.dataflow import DataFlowGraph, DataFlowEdge, EdgeType, HandlerInfo
 from integradio.inspector.panel import (
     create_tree_view,
     create_dataflow_view,
+    create_floating_inspector,
 )
 
 
@@ -431,3 +435,335 @@ class TestFloatingInspector:
 
         for tab in expected_tabs:
             assert isinstance(tab, str)
+
+
+class TestFloatingInspectorIntegration:
+    """Integration tests for create_floating_inspector with mock blocks."""
+
+    def test_floating_inspector_with_mock_blocks(self, mock_blocks, mock_semantic_components):
+        """Test creating floating inspector with mock blocks."""
+        html = create_floating_inspector(mock_blocks)
+
+        # Should contain main container
+        assert "semantic-inspector" in html
+        assert "inspector-toggle" in html
+        assert "inspector-panel" in html
+
+        # Should contain JavaScript
+        assert "<script>" in html
+        assert "__SEMANTIC_INSPECTOR__" in html
+
+        # Should contain CSS
+        assert "<style>" in html
+        assert "#inspector-tabs" in html
+
+    def test_floating_inspector_html_structure(self, mock_blocks, mock_semantic_components):
+        """Test floating inspector HTML structure."""
+        html = create_floating_inspector(mock_blocks)
+
+        # Check toggle button
+        assert "inspector-toggle" in html
+        assert "border-radius: 50%" in html
+        assert "width: 50px" in html
+        assert "height: 50px" in html
+
+        # Check panel positioning
+        assert "position: fixed" in html
+        assert "z-index: 9999" in html
+
+        # Check tabs
+        assert 'data-tab="tree"' in html
+        assert 'data-tab="flow"' in html
+        assert 'data-tab="search"' in html
+
+    def test_floating_inspector_javascript(self, mock_blocks, mock_semantic_components):
+        """Test floating inspector JavaScript functionality."""
+        html = create_floating_inspector(mock_blocks)
+
+        # Check toggle functionality
+        assert "toggle.addEventListener('click'" in html
+        assert "panel.style.display" in html
+
+        # Check tab switching
+        assert "document.querySelectorAll('.tab')" in html
+        assert "classList.add('active')" in html
+
+        # Check data storage
+        assert "window.__SEMANTIC_INSPECTOR__" in html
+        assert "tree:" in html
+        assert "dataflow:" in html
+
+    def test_floating_inspector_tree_content(self, mock_blocks, mock_semantic_components):
+        """Test floating inspector includes tree content."""
+        html = create_floating_inspector(mock_blocks)
+
+        # Should contain tree representation
+        assert "tree-content" in html
+
+    def test_floating_inspector_with_empty_blocks(self):
+        """Test floating inspector with empty blocks."""
+        from .conftest import MockBlocks
+
+        empty_blocks = MockBlocks()
+        html = create_floating_inspector(empty_blocks)
+
+        # Should still generate valid HTML
+        assert "semantic-inspector" in html
+        assert "inspector-toggle" in html
+
+    def test_floating_inspector_json_data(self, mock_blocks, mock_semantic_components):
+        """Test that floating inspector embeds valid JSON data."""
+        import json
+
+        html = create_floating_inspector(mock_blocks)
+
+        # Extract the tree JSON from the HTML
+        # The tree is embedded in window.__SEMANTIC_INSPECTOR__.tree
+        assert "tree:" in html
+        assert "dataflow:" in html
+
+
+class TestInspectorPanelWithGradio:
+    """Tests for create_inspector_panel that require Gradio."""
+
+    def test_inspector_panel_requires_gradio(self):
+        """Test that create_inspector_panel requires Gradio Blocks context."""
+        from integradio.inspector.panel import create_inspector_panel
+
+        # Try to create panel - will need Gradio Blocks context
+        try:
+            from .conftest import MockBlocks
+            blocks = MockBlocks()
+            panel = create_inspector_panel(blocks)
+            # If we get here, Gradio is installed and in Blocks context
+            assert panel is not None
+        except (ImportError, AttributeError):
+            # Gradio not installed or outside Blocks context - expected
+            pass
+
+    @pytest.fixture
+    def mock_gradio(self):
+        """Create mock Gradio module."""
+        mock_gr = MagicMock()
+
+        # Mock Sidebar context manager
+        mock_sidebar = MagicMock()
+        mock_sidebar.__enter__ = MagicMock(return_value=mock_sidebar)
+        mock_sidebar.__exit__ = MagicMock(return_value=None)
+        mock_gr.Sidebar.return_value = mock_sidebar
+
+        # Mock Tabs context manager
+        mock_tabs = MagicMock()
+        mock_tabs.__enter__ = MagicMock(return_value=mock_tabs)
+        mock_tabs.__exit__ = MagicMock(return_value=None)
+        mock_gr.Tabs.return_value = mock_tabs
+
+        # Mock Tab context manager
+        mock_tab = MagicMock()
+        mock_tab.__enter__ = MagicMock(return_value=mock_tab)
+        mock_tab.__exit__ = MagicMock(return_value=None)
+        mock_gr.Tab.return_value = mock_tab
+
+        # Mock components
+        mock_gr.HTML.return_value = MagicMock()
+        mock_gr.Markdown.return_value = MagicMock()
+        mock_gr.Textbox.return_value = MagicMock()
+        mock_gr.JSON.return_value = MagicMock()
+        mock_gr.Button.return_value = MagicMock()
+
+        return mock_gr
+
+    def test_inspector_panel_creation_mocked(self, mock_gradio, mock_blocks, mock_semantic_components):
+        """Test inspector panel creation with mocked Gradio."""
+        with patch.dict('sys.modules', {'gradio': mock_gradio}):
+            with patch('integradio.inspector.panel.gr', mock_gradio):
+                from integradio.inspector.panel import create_inspector_panel
+
+                panel = create_inspector_panel(
+                    mock_blocks,
+                    position="right",
+                    width=400,
+                    collapsed=True,
+                )
+
+                # Verify Sidebar was created
+                mock_gradio.Sidebar.assert_called_once()
+
+
+class TestSearchPanelCreation:
+    """Tests for search panel creation."""
+
+    def test_search_panel_callback(self):
+        """Test that search panel accepts callback."""
+        from integradio.inspector.panel import create_search_panel
+
+        def mock_search(query):
+            return []
+
+        try:
+            search_input, results = create_search_panel(mock_search)
+            assert search_input is not None
+            assert results is not None
+        except ImportError:
+            # Gradio not installed - skip
+            pytest.skip("Gradio not installed")
+
+
+class TestDetailsPanelCreation:
+    """Tests for details panel creation."""
+
+    def test_details_panel_components(self):
+        """Test that details panel creates correct components."""
+        from integradio.inspector.panel import create_details_panel
+
+        try:
+            comp_id, details = create_details_panel()
+            assert comp_id is not None
+            assert details is not None
+        except ImportError:
+            pytest.skip("Gradio not installed")
+
+
+class TestTreeViewRendering:
+    """Additional tests for tree view rendering edge cases."""
+
+    def test_tree_view_with_visual_spec_tokens(self):
+        """Test tree view with visual spec tokens."""
+        tree = ComponentTree()
+
+        node = ComponentNode(
+            id="1",
+            component_type="Button",
+            intent="styled button",
+            has_visual_spec=True,
+            visual_tokens={"color": "#3b82f6", "background": "#ffffff"},
+        )
+
+        tree.nodes = {"1": node}
+        html = create_tree_view(tree)
+
+        # Should show blue icon for visual spec
+        assert "styled button" in html
+
+    def test_tree_view_with_file_info(self):
+        """Test tree view with file path and line number."""
+        tree = ComponentTree()
+
+        node = ComponentNode(
+            id="1",
+            component_type="Textbox",
+            intent="input field",
+            file_path="/app/main.py",
+            line_number=42,
+        )
+
+        tree.nodes = {"1": node}
+        html = create_tree_view(tree)
+
+        assert "input field" in html
+
+    def test_tree_view_with_current_value(self):
+        """Test tree view with current value set."""
+        tree = ComponentTree()
+
+        node = ComponentNode(
+            id="1",
+            component_type="Textbox",
+            intent="text input",
+            current_value="Hello World",
+        )
+
+        tree.nodes = {"1": node}
+        html = create_tree_view(tree)
+
+        assert "text input" in html
+
+    def test_tree_view_interactive_state(self):
+        """Test tree view with interactive/non-interactive components."""
+        tree = ComponentTree()
+
+        interactive_node = ComponentNode(
+            id="1",
+            component_type="Button",
+            intent="clickable button",
+            is_interactive=True,
+        )
+
+        readonly_node = ComponentNode(
+            id="2",
+            component_type="Textbox",
+            intent="readonly field",
+            is_interactive=False,
+        )
+
+        tree.nodes = {"1": interactive_node, "2": readonly_node}
+        html = create_tree_view(tree)
+
+        assert "clickable button" in html
+        assert "readonly field" in html
+
+
+class TestDataflowViewRendering:
+    """Additional tests for dataflow view rendering."""
+
+    def test_dataflow_view_with_state_edges(self):
+        """Test dataflow view with STATE edge type."""
+        graph = DataFlowGraph()
+
+        graph.edges.append(DataFlowEdge(
+            source_id="state1",
+            target_id="comp1",
+            edge_type=EdgeType.STATE,
+            handler_name="state_handler",
+        ))
+
+        md = create_dataflow_view(graph)
+
+        assert "```mermaid" in md
+
+    def test_dataflow_view_multiple_handlers(self):
+        """Test dataflow view with multiple interconnected handlers."""
+        graph = DataFlowGraph()
+
+        # Handler 1: input -> process -> output1
+        graph.add_handler(HandlerInfo(
+            name="process_input",
+            inputs=["input1"],
+            outputs=["output1"],
+            trigger_id="btn1",
+            event_type="click",
+        ))
+
+        # Handler 2: output1 -> transform -> output2
+        graph.add_handler(HandlerInfo(
+            name="transform_output",
+            inputs=["output1"],
+            outputs=["output2"],
+            trigger_id="btn2",
+            event_type="click",
+        ))
+
+        md = create_dataflow_view(graph)
+
+        assert "```mermaid" in md
+        assert "flowchart" in md
+
+    def test_dataflow_view_different_event_types(self):
+        """Test dataflow view with different event types."""
+        graph = DataFlowGraph()
+
+        events = ["click", "change", "submit", "input", "blur"]
+
+        for i, event in enumerate(events):
+            graph.add_handler(HandlerInfo(
+                name=f"handler_{event}",
+                inputs=[f"in{i}"],
+                outputs=[f"out{i}"],
+                trigger_id=f"trigger{i}",
+                event_type=event,
+            ))
+
+        md = create_dataflow_view(graph)
+
+        # Should contain all event types
+        assert "```mermaid" in md

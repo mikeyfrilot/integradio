@@ -712,6 +712,80 @@ class TestFallbackSearchEdgeCases:
         # Should return results without error (using epsilon for division)
         assert isinstance(results, list)
 
+    def test_fallback_with_type_filter_only(self, sample_vector):
+        """Fallback search with only component_type filter."""
+        registry = ComponentRegistry(db_path=None)
+        registry._index = None  # Force fallback
+
+        # Register components with different types
+        registry.register(
+            1,
+            sample_vector,
+            ComponentMetadata(component_id=1, component_type="Textbox", intent="a"),
+        )
+        registry.register(
+            2,
+            sample_vector * 0.9,
+            ComponentMetadata(component_id=2, component_type="Button", intent="b"),
+        )
+        registry.register(
+            3,
+            sample_vector * 0.8,
+            ComponentMetadata(component_id=3, component_type="Textbox", intent="c"),
+        )
+
+        query = sample_vector
+        results = registry.search(query, k=10, component_type="Textbox")
+
+        assert len(results) == 2
+        for r in results:
+            assert r.metadata.component_type == "Textbox"
+
+    def test_fallback_with_tags_filter_only(self, sample_vector):
+        """Fallback search with only tags filter (covers line 334)."""
+        registry = ComponentRegistry(db_path=None)
+        registry._index = None  # Force fallback
+
+        # Register components with different tags but same type
+        registry.register(
+            1,
+            sample_vector,
+            ComponentMetadata(
+                component_id=1,
+                component_type="Textbox",
+                intent="a",
+                tags=["input"],
+            ),
+        )
+        registry.register(
+            2,
+            sample_vector * 0.9,
+            ComponentMetadata(
+                component_id=2,
+                component_type="Textbox",
+                intent="b",
+                tags=["action"],  # Different tag - should be filtered out
+            ),
+        )
+        registry.register(
+            3,
+            sample_vector * 0.8,
+            ComponentMetadata(
+                component_id=3,
+                component_type="Textbox",
+                intent="c",
+                tags=["input", "special"],
+            ),
+        )
+
+        query = sample_vector
+        # Only filter by tags, not by type
+        results = registry.search(query, k=10, tags=["input"])
+
+        assert len(results) == 2
+        for r in results:
+            assert "input" in r.metadata.tags
+
     def test_fallback_with_type_and_tag_filter(self, sample_vector):
         """Fallback search applies both type and tag filters."""
         registry = ComponentRegistry(db_path=None)
@@ -839,3 +913,381 @@ class TestClearEdgeCases:
 
         assert len(results) == 1
         assert results[0].component_id == 999
+
+
+class TestHNSWSearchPath:
+    """Test HNSW search when hnswlib is available (not using fallback)."""
+
+    def test_hnsw_search_basic(self, sample_vector):
+        """Test search uses HNSW index when available."""
+        registry = ComponentRegistry(db_path=None)
+        # Don't set _index to None - use real HNSW
+
+        # Register components
+        for i in range(5):
+            meta = ComponentMetadata(
+                component_id=i,
+                component_type="Textbox" if i % 2 == 0 else "Button",
+                intent=f"component {i}",
+                tags=["test", f"tag_{i}"],
+            )
+            np.random.seed(i)
+            vec = np.random.rand(768).astype(np.float32)
+            registry.register(i, vec, meta)
+
+        # Search using HNSW (not fallback)
+        query = np.random.rand(768).astype(np.float32)
+        results = registry.search(query, k=3)
+
+        assert len(results) == 3
+        assert all(isinstance(r, SearchResult) for r in results)
+        # Results should be sorted by score (highest first)
+        scores = [r.score for r in results]
+        assert scores == sorted(scores, reverse=True)
+
+    def test_hnsw_search_with_type_filter(self, sample_vector):
+        """Test HNSW search with component_type filter."""
+        registry = ComponentRegistry(db_path=None)
+
+        # Register mixed components
+        for i in range(6):
+            comp_type = "Textbox" if i < 3 else "Button"
+            meta = ComponentMetadata(
+                component_id=i,
+                component_type=comp_type,
+                intent=f"component {i}",
+            )
+            np.random.seed(i)
+            vec = np.random.rand(768).astype(np.float32)
+            registry.register(i, vec, meta)
+
+        query = np.random.rand(768).astype(np.float32)
+        results = registry.search(query, k=10, component_type="Textbox")
+
+        assert len(results) == 3
+        for r in results:
+            assert r.metadata.component_type == "Textbox"
+
+    def test_hnsw_search_with_tags_filter(self, sample_vector):
+        """Test HNSW search with tags filter."""
+        registry = ComponentRegistry(db_path=None)
+
+        # Register components with different tags
+        registry.register(
+            1,
+            np.random.rand(768).astype(np.float32),
+            ComponentMetadata(component_id=1, component_type="Textbox", intent="a", tags=["input"]),
+        )
+        registry.register(
+            2,
+            np.random.rand(768).astype(np.float32),
+            ComponentMetadata(component_id=2, component_type="Button", intent="b", tags=["action"]),
+        )
+        registry.register(
+            3,
+            np.random.rand(768).astype(np.float32),
+            ComponentMetadata(component_id=3, component_type="Textbox", intent="c", tags=["input", "special"]),
+        )
+
+        query = np.random.rand(768).astype(np.float32)
+        results = registry.search(query, k=10, tags=["input"])
+
+        assert len(results) == 2
+        for r in results:
+            assert "input" in r.metadata.tags
+
+    def test_hnsw_search_filters_missing_metadata(self, sample_vector):
+        """Test HNSW search gracefully handles labels not in metadata."""
+        registry = ComponentRegistry(db_path=None)
+
+        # Register a component
+        meta = ComponentMetadata(component_id=1, component_type="Textbox", intent="test")
+        vec = np.random.rand(768).astype(np.float32)
+        registry.register(1, vec, meta)
+
+        # Manually remove from metadata dict to simulate inconsistency
+        registry._metadata.clear()
+
+        query = np.random.rand(768).astype(np.float32)
+        results = registry.search(query, k=5)
+
+        # Should return empty because metadata is missing
+        assert results == []
+
+    def test_hnsw_search_k_limit_reached_early(self, sample_vector):
+        """Test HNSW search stops when k results found after filtering."""
+        registry = ComponentRegistry(db_path=None)
+
+        # Register many components with same type
+        for i in range(10):
+            meta = ComponentMetadata(
+                component_id=i,
+                component_type="Textbox",
+                intent=f"component {i}",
+            )
+            np.random.seed(i)
+            vec = np.random.rand(768).astype(np.float32)
+            registry.register(i, vec, meta)
+
+        query = np.random.rand(768).astype(np.float32)
+        results = registry.search(query, k=3)
+
+        assert len(results) == 3
+
+
+class TestDatabaseErrors:
+    """Test database error handling paths."""
+
+    def test_database_connection_error(self, tmp_path):
+        """Test handling of database connection error."""
+        from integradio.exceptions import RegistryDatabaseError
+
+        # Try to create a database in a non-existent directory
+        invalid_path = tmp_path / "nonexistent_subdir" / "another" / "test.db"
+
+        with pytest.raises(RegistryDatabaseError) as exc_info:
+            ComponentRegistry(db_path=invalid_path)
+
+        assert "connect" in str(exc_info.value)
+
+    def test_schema_init_error(self, tmp_path):
+        """Test handling of schema initialization error."""
+        from integradio.exceptions import RegistryDatabaseError
+        from unittest.mock import patch, MagicMock
+        import sqlite3
+
+        # Create a mock connection that raises on executescript
+        mock_conn = MagicMock()
+        mock_conn.executescript.side_effect = sqlite3.Error("Schema init failed")
+
+        with patch("sqlite3.connect", return_value=mock_conn):
+            with pytest.raises(RegistryDatabaseError) as exc_info:
+                ComponentRegistry(db_path=None)
+
+        assert "schema_init" in str(exc_info.value)
+
+    def test_registration_database_error(self, sample_vector):
+        """Test registration error with rollback."""
+        from integradio.exceptions import ComponentRegistrationError
+
+        registry = ComponentRegistry(db_path=None)
+
+        # Close the connection to force an error on next operation
+        registry._conn.close()
+
+        meta = ComponentMetadata(
+            component_id=1,
+            component_type="Textbox",
+            intent="test",
+        )
+
+        with pytest.raises(ComponentRegistrationError) as exc_info:
+            registry.register(1, sample_vector, meta)
+
+        assert exc_info.value.component_id == 1
+        # Memory state should be rolled back
+        assert 1 not in registry._vectors
+        assert 1 not in registry._metadata
+
+    def test_add_relationship_database_error(self, sample_vector):
+        """Test add_relationship error handling."""
+        from integradio.exceptions import RegistryDatabaseError
+
+        registry = ComponentRegistry(db_path=None)
+
+        # Register components first
+        for i in [1, 2]:
+            meta = ComponentMetadata(component_id=i, component_type="Textbox", intent=f"test {i}")
+            registry.register(i, sample_vector, meta)
+
+        # Close connection to force error
+        registry._conn.close()
+
+        with pytest.raises(RegistryDatabaseError) as exc_info:
+            registry.add_relationship(1, 2, "dataflow")
+
+        assert "add_relationship" in str(exc_info.value)
+
+    def test_get_relationships_database_error(self, sample_vector):
+        """Test get_relationships error handling."""
+        from integradio.exceptions import RegistryDatabaseError
+
+        registry = ComponentRegistry(db_path=None)
+
+        meta = ComponentMetadata(component_id=1, component_type="Textbox", intent="test")
+        registry.register(1, sample_vector, meta)
+
+        # Close connection to force error
+        registry._conn.close()
+
+        with pytest.raises(RegistryDatabaseError) as exc_info:
+            registry.get_relationships(1)
+
+        assert "get_relationships" in str(exc_info.value)
+
+    def test_export_graph_database_error(self, sample_vector):
+        """Test export_graph error handling."""
+        from integradio.exceptions import RegistryDatabaseError
+
+        registry = ComponentRegistry(db_path=None)
+
+        meta = ComponentMetadata(component_id=1, component_type="Textbox", intent="test")
+        registry.register(1, sample_vector, meta)
+
+        # Close connection to force error
+        registry._conn.close()
+
+        with pytest.raises(RegistryDatabaseError) as exc_info:
+            registry.export_graph()
+
+        assert "export_graph" in str(exc_info.value)
+
+    def test_clear_database_error(self, sample_vector):
+        """Test clear error handling."""
+        from integradio.exceptions import RegistryDatabaseError
+
+        registry = ComponentRegistry(db_path=None)
+
+        meta = ComponentMetadata(component_id=1, component_type="Textbox", intent="test")
+        registry.register(1, sample_vector, meta)
+
+        # Close connection to force error
+        registry._conn.close()
+
+        with pytest.raises(RegistryDatabaseError) as exc_info:
+            registry.clear()
+
+        assert "clear" in str(exc_info.value)
+
+
+class TestHNSWInitialization:
+    """Test HNSW index initialization and re-initialization."""
+
+    def test_hnsw_initialization_with_custom_params(self):
+        """Test HNSW is initialized with custom parameters."""
+        registry = ComponentRegistry(
+            db_path=None,
+            dimension=512,
+            max_elements=5000,
+            ef_construction=100,
+            M=32,
+        )
+
+        assert registry.dimension == 512
+        assert registry.max_elements == 5000
+        # HNSW index should be initialized
+        assert registry._index is not None
+
+    def test_registry_without_hnswlib(self):
+        """Test registry works when HAS_HNSWLIB is False."""
+        import integradio.registry as registry_module
+
+        # Save original value
+        original_has_hnswlib = registry_module.HAS_HNSWLIB
+
+        try:
+            # Simulate hnswlib not being available
+            registry_module.HAS_HNSWLIB = False
+
+            registry = ComponentRegistry(db_path=None)
+
+            # _index should be None
+            assert registry._index is None
+
+            # Registry should still work via fallback
+            meta = ComponentMetadata(
+                component_id=1,
+                component_type="Textbox",
+                intent="test",
+            )
+            vec = np.random.rand(768).astype(np.float32)
+            registry.register(1, vec, meta)
+
+            assert 1 in registry
+            results = registry.search(vec, k=1)
+            assert len(results) == 1
+        finally:
+            # Restore original value
+            registry_module.HAS_HNSWLIB = original_has_hnswlib
+
+    def test_import_without_hnswlib_available(self):
+        """Test HAS_HNSWLIB is False when hnswlib import fails (lines 26-27)."""
+        import sys
+        import importlib
+
+        # Save references to clean up later
+        modules_to_restore = {}
+        for key in list(sys.modules.keys()):
+            if "hnswlib" in key or key == "integradio.registry":
+                modules_to_restore[key] = sys.modules.pop(key)
+
+        # Set up import hook to make hnswlib fail
+        import builtins
+        original_import = builtins.__import__
+
+        def mock_import(name, *args, **kwargs):
+            if name == "hnswlib":
+                raise ImportError("No module named 'hnswlib'")
+            return original_import(name, *args, **kwargs)
+
+        try:
+            builtins.__import__ = mock_import
+
+            # Re-import the registry module to trigger the ImportError path
+            # The module was removed from sys.modules, so this is a fresh import
+            import integradio.registry as fresh_registry
+
+            # Now HAS_HNSWLIB should be False
+            assert fresh_registry.HAS_HNSWLIB is False
+        finally:
+            # Restore original import first
+            builtins.__import__ = original_import
+
+            # Remove the freshly imported module with HAS_HNSWLIB=False
+            if "integradio.registry" in sys.modules:
+                del sys.modules["integradio.registry"]
+
+            # Restore original modules
+            for key, module in modules_to_restore.items():
+                sys.modules[key] = module
+
+    def test_hnsw_add_items_during_registration(self, sample_vector):
+        """Test HNSW add_items is called during registration."""
+        registry = ComponentRegistry(db_path=None)
+
+        meta = ComponentMetadata(
+            component_id=1,
+            component_type="Textbox",
+            intent="test",
+        )
+        registry.register(1, sample_vector, meta)
+
+        # Verify it's searchable via HNSW
+        results = registry.search(sample_vector, k=1)
+        assert len(results) == 1
+        assert results[0].component_id == 1
+
+    def test_clear_reinitializes_hnsw_index(self, sample_vector):
+        """Test that clear() properly reinitializes HNSW index."""
+        registry = ComponentRegistry(db_path=None)
+
+        # Register and verify
+        meta = ComponentMetadata(component_id=1, component_type="Textbox", intent="test")
+        registry.register(1, sample_vector, meta)
+
+        old_index = registry._index
+
+        # Clear and verify index is recreated
+        registry.clear()
+
+        # Index should be a new object
+        assert registry._index is not old_index
+        assert len(registry) == 0
+
+        # Should be able to register and search again
+        registry.register(2, sample_vector, ComponentMetadata(
+            component_id=2, component_type="Button", intent="new"
+        ))
+        results = registry.search(sample_vector, k=1)
+        assert len(results) == 1
+        assert results[0].component_id == 2

@@ -129,11 +129,12 @@ def create_hero_section(
                 tags=["cta", "secondary"],
             )
 
-        # Hero image
+        # Hero image - accessible label retained for screen readers
         if config.hero_image:
             components["hero_image"] = semantic(
                 gr.Image(
                     value=config.hero_image,
+                    label="Hero image",
                     show_label=False,
                     container=False,
                     elem_id="hero-image",

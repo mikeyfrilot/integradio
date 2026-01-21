@@ -100,7 +100,7 @@ def create_data_table(
                 components["search"] = semantic(
                     gr.Textbox(
                         placeholder="Search all columns...",
-                        label="",
+                        label="Search table data",
                         show_label=False,
                         elem_id="table-search",
                     ),
@@ -198,16 +198,16 @@ def create_data_table(
         tags=["table", "data", "primary"],
     )
 
-    # Pagination
+    # Pagination - default size for WCAG 2.2 touch target compliance (44x44px min)
     with gr.Row():
         components["first_btn"] = semantic(
-            gr.Button("⏮️ First", size="sm", variant="secondary"),
+            gr.Button("⏮️ First", variant="secondary"),
             intent="navigates to first page of results",
             tags=["pagination", "navigation"],
         )
 
         components["prev_btn"] = semantic(
-            gr.Button("◀️ Previous", size="sm", variant="secondary"),
+            gr.Button("◀️ Previous", variant="secondary"),
             intent="navigates to previous page of results",
             tags=["pagination", "navigation"],
         )
@@ -219,13 +219,13 @@ def create_data_table(
         )
 
         components["next_btn"] = semantic(
-            gr.Button("Next ▶️", size="sm", variant="secondary"),
+            gr.Button("Next ▶️", variant="secondary"),
             intent="navigates to next page of results",
             tags=["pagination", "navigation"],
         )
 
         components["last_btn"] = semantic(
-            gr.Button("Last ⏭️", size="sm", variant="secondary"),
+            gr.Button("Last ⏭️", variant="secondary"),
             intent="navigates to last page of results",
             tags=["pagination", "navigation"],
         )
@@ -261,14 +261,34 @@ def create_data_table(
                 tags=["action", "delete", "destructive"],
             )
 
-    # Wire up row selection
+    # Wire up row selection with edge case handling
     def handle_select(evt: gr.SelectData, table_data):
-        if evt is None:
+        # Edge case: No event or missing index attribute
+        if evt is None or not hasattr(evt, "index"):
             return {}
-        row_idx = evt.index[0]
-        if row_idx < len(data):
-            return data[row_idx]
-        return {}
+
+        # Edge case: Index could be tuple, list, or int
+        index = evt.index
+        if isinstance(index, (tuple, list)):
+            if len(index) == 0:
+                return {}
+            row_idx = index[0]
+        elif isinstance(index, int):
+            row_idx = index
+        else:
+            return {}
+
+        # Edge case: Bounds checking
+        if not isinstance(row_idx, int) or row_idx < 0:
+            return {}
+
+        # Edge case: data could be None or empty
+        if not data or row_idx >= len(data):
+            return {}
+
+        # Edge case: row could be non-dict
+        row = data[row_idx]
+        return row if isinstance(row, dict) else {}
 
     if config.allow_selection:
         components["table"].select(

@@ -39,10 +39,14 @@ classifiers = [
 ]
 
 dependencies = [
-    "gradio>=4.0.0,<7.0.0",
+    # Security: Gradio 5.0.0+ required for CVE patches (Trail of Bits audit)
+    # Known vulnerabilities in < 5.0.0: CVE-2024-1561, CVE-2024-8021, CVE-2023-51449
+    "gradio>=5.0.0,<7.0.0",
     "numpy>=1.24.0",
     "httpx>=0.24.0",
     "pandas>=2.0.0",
+    # Required for version checking in security module
+    "packaging>=21.0",
 ]
 
 [project.optional-dependencies]
@@ -61,6 +65,11 @@ dev = [
     "pytest-cov>=4.1.0",
     "ruff>=0.4.0",
     "mypy>=1.10.0",
+    # Security scanning
+    "bandit>=1.7.0",
+    "pip-audit>=2.6.0",
+    # For WebSocket tests
+    "websockets>=12.0",
 ]
 
 [project.urls]

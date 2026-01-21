@@ -767,12 +767,34 @@ class UISpec:
 
     @classmethod
     def load(cls, path: str | Path) -> "UISpec":
-        """Load specification from JSON file."""
+        """Load specification from JSON file.
+
+        Note: Full deserialization of nested token structures requires
+        type information that may not be preserved in JSON export.
+        This loads basic structure; complex token values use defaults.
+        """
         path = Path(path)
         with open(path) as f:
             data = json.load(f)
-        # TODO: Implement full deserialization
-        return cls(name=data.get("name", ""), version=data.get("version", "1.0.0"))
+
+        spec = cls(
+            name=data.get("name", ""),
+            version=data.get("version", "1.0.0"),
+        )
+
+        # Load pages (basic structure)
+        pages_data = data.get("pages", {})
+        if isinstance(pages_data, dict):
+            for page_name, page_data in pages_data.items():
+                if isinstance(page_data, dict):
+                    page = PageSpec(
+                        name=page_data.get("name", page_name),
+                        route=page_data.get("route", f"/{page_name}"),
+                        layout=page_data.get("layout", "full-width"),
+                    )
+                    spec.pages[page_name] = page
+
+        return spec
 
     def to_css(self, theme: str | None = None) -> str:
         """Generate CSS for the entire application."""

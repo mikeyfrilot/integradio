@@ -16,6 +16,7 @@ import gradio as gr
 
 from ..components import semantic
 from ..blocks import SemanticBlocks
+from ..ux import create_confirmation_dialog
 
 
 @dataclass
@@ -108,27 +109,34 @@ def create_chat_interface(
                 tags=["action", "primary", "submit"],
             )
 
-    # Action buttons row
+    # Action buttons row - default size for WCAG 2.2 touch target compliance (44x44px min)
     with gr.Row():
         components["clear_btn"] = semantic(
-            gr.Button("Clear Chat", variant="secondary", size="sm"),
+            gr.Button("Clear Chat", variant="secondary"),
             intent="clears entire conversation history",
             tags=["action", "destructive", "reset"],
         )
 
         if config.enable_regenerate:
             components["regenerate_btn"] = semantic(
-                gr.Button("Regenerate", variant="secondary", size="sm"),
+                gr.Button("Regenerate", variant="secondary"),
                 intent="regenerates last AI response",
                 tags=["action", "retry"],
             )
 
         if config.enable_export:
             components["export_btn"] = semantic(
-                gr.Button("Export", variant="secondary", size="sm"),
+                gr.Button("Export", variant="secondary"),
                 intent="exports conversation as downloadable file",
                 tags=["action", "export"],
             )
+
+    # Confirmation dialog for clear chat (2026 UX best practice)
+    components["clear_confirm"] = gr.HTML(
+        "",
+        visible=False,
+        elem_id="clear-confirm-dialog",
+    )
 
     # Token counter
     if config.show_token_count:
@@ -138,52 +146,82 @@ def create_chat_interface(
             tags=["status", "metrics"],
         )
 
-    # Settings row
+    # Settings row with help text for accessibility (2026 UX best practice)
     with gr.Accordion("Generation Settings", open=False):
         with gr.Row():
-            components["temperature"] = semantic(
-                gr.Slider(
-                    minimum=0,
-                    maximum=2,
-                    value=config.temperature,
-                    step=0.1,
-                    label="Temperature",
-                ),
-                intent="controls randomness of AI responses",
-                tags=["config", "generation"],
-            )
+            with gr.Column():
+                gr.Markdown(
+                    '<small style="color: #6b7280;">Lower = more focused and consistent, '
+                    'Higher = more creative and varied</small>'
+                )
+                components["temperature"] = semantic(
+                    gr.Slider(
+                        minimum=0,
+                        maximum=2,
+                        value=config.temperature,
+                        step=0.1,
+                        label="Temperature",
+                    ),
+                    intent="controls randomness of AI responses",
+                    tags=["config", "generation"],
+                )
 
-            components["max_length"] = semantic(
-                gr.Slider(
-                    minimum=100,
-                    maximum=config.max_tokens,
-                    value=1024,
-                    step=100,
-                    label="Max Response Length",
-                ),
-                intent="limits maximum length of AI response",
-                tags=["config", "generation"],
-            )
+            with gr.Column():
+                gr.Markdown(
+                    '<small style="color: #6b7280;">Maximum number of tokens in the AI response. '
+                    'Longer responses use more tokens.</small>'
+                )
+                components["max_length"] = semantic(
+                    gr.Slider(
+                        minimum=100,
+                        maximum=config.max_tokens,
+                        value=1024,
+                        step=100,
+                        label="Max Response Length",
+                    ),
+                    intent="limits maximum length of AI response",
+                    tags=["config", "generation"],
+                )
 
     # Wire up default handlers if chat_fn provided
     if chat_fn:
         def respond(message, history, system_prompt, temp, max_len):
-            if not message.strip():
-                return history, ""
+            # Edge case: None or invalid message input
+            if not message or not isinstance(message, str) or not message.strip():
+                return history or [], ""
 
-            history = history or []
+            # Edge case: Ensure history is a mutable list
+            if not isinstance(history, list):
+                history = list(history) if history else []
+            else:
+                history = history.copy()  # Don't mutate original
+
             # Gradio 6.x uses tuples: (user_msg, assistant_msg)
             history.append((message, None))
 
             if stream:
                 response = ""
-                for chunk in chat_fn(message, history, system_prompt, temp, max_len):
-                    response += chunk
-                    history[-1] = (message, response)
+                try:
+                    for chunk in chat_fn(message, history, system_prompt, temp, max_len):
+                        # Edge case: chunk could be None
+                        if chunk is not None:
+                            response += str(chunk)
+                        history[-1] = (message, response)
+                        yield history, ""
+                except Exception as e:
+                    # Edge case: Error during streaming
+                    history[-1] = (message, response + f"\n\n[Error: {str(e)[:100]}]")
                     yield history, ""
             else:
-                response = chat_fn(message, history, system_prompt, temp, max_len)
-                history[-1] = (message, response)
+                try:
+                    response = chat_fn(message, history, system_prompt, temp, max_len)
+                    # Edge case: None response
+                    if response is None:
+                        response = "[No response received]"
+                    history[-1] = (message, str(response))
+                except Exception as e:
+                    # Edge case: Error during response generation
+                    history[-1] = (message, f"[Error: {str(e)[:100]}]")
                 yield history, ""
 
         inputs = [
@@ -198,11 +236,27 @@ def create_chat_interface(
         components["send_btn"].click(fn=respond, inputs=inputs, outputs=outputs)
         components["user_input"].submit(fn=respond, inputs=inputs, outputs=outputs)
 
-        # Clear handler
-        components["clear_btn"].click(
-            fn=lambda: ([], ""),
-            outputs=[components["chatbot"], components["user_input"]],
+    # Confirmation flow for clear chat (separate from chat_fn to always work)
+    def show_clear_confirm():
+        return gr.update(
+            value=create_confirmation_dialog(
+                title="Clear Conversation?",
+                message="This will delete your entire conversation history. This action cannot be undone.",
+                confirm_label="Clear Chat",
+                cancel_label="Cancel",
+                danger=True,
+            ),
+            visible=True,
         )
+
+    def hide_confirm_and_clear():
+        return gr.update(value="", visible=False), [], ""
+
+    # Show confirmation on clear click
+    components["clear_btn"].click(
+        fn=show_clear_confirm,
+        outputs=[components["clear_confirm"]],
+    )
 
     return components
 

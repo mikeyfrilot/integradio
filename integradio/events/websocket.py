@@ -28,6 +28,11 @@ from .security import (
     validate_origin,
     validate_message_size,
 )
+from ..exceptions import (
+    WebSocketDisconnectedError,
+    WebSocketTimeoutError,
+    WebSocketAuthenticationError,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -139,7 +144,8 @@ class WebSocketServer:
         for ws in list(self._connections.values()):
             try:
                 await ws.close(1001, "Server shutting down")
-            except Exception:
+            except (ConnectionResetError, BrokenPipeError, OSError):
+                # Connection already closed - expected during shutdown
                 pass
 
         logger.info("WebSocket server stopped")
@@ -178,9 +184,14 @@ class WebSocketServer:
             # Authenticate if required
             user_id = None
             if self.config.require_auth:
-                user_id = await self._authenticate(websocket, client_id)
-                if user_id is None:
-                    await websocket.close(1008, "Authentication failed")
+                try:
+                    user_id = await self._authenticate(websocket, client_id)
+                    if user_id is None:
+                        await websocket.close(1008, "Authentication failed")
+                        return
+                except (WebSocketTimeoutError, WebSocketAuthenticationError) as e:
+                    logger.warning(f"Auth failed for {client_id}: {e}")
+                    await websocket.close(1008, str(e.message))
                     return
 
             # Register connection
@@ -208,8 +219,14 @@ class WebSocketServer:
             # Handle messages
             await self._message_loop(websocket, client_id, conn_info)
 
+        except WebSocketDisconnectedError:
+            # Normal disconnect - no error logging needed
+            pass
+        except asyncio.CancelledError:
+            # Task cancelled - clean shutdown
+            pass
         except Exception as e:
-            logger.error(f"WebSocket error for {client_id}: {e}")
+            logger.error(f"WebSocket error for {client_id}: {type(e).__name__}: {e}")
 
         finally:
             # Cleanup
@@ -256,10 +273,20 @@ class WebSocketServer:
 
         except asyncio.TimeoutError:
             logger.warning(f"Auth timeout for {client_id}")
-            return None
+            raise WebSocketTimeoutError(
+                operation="authentication",
+                timeout_seconds=self.config.auth_timeout,
+            )
+        except WebSocketDisconnectedError:
+            raise
         except Exception as e:
-            logger.error(f"Auth error for {client_id}: {e}")
-            return None
+            logger.error(f"Auth error for {client_id}: {type(e).__name__}: {e}")
+            # Get client IP from websocket (edge case fix: conn_info not in scope)
+            client_ip = self._get_client_ip(websocket)
+            raise WebSocketAuthenticationError(
+                reason=str(e),
+                client_ip=client_ip,
+            ) from e
 
     async def _message_loop(
         self,
@@ -297,11 +324,25 @@ class WebSocketServer:
                 # Parse and handle message
                 await self._handle_message(websocket, client_id, data)
 
+            except WebSocketDisconnectedError:
+                # Clean disconnect - exit silently
+                break
+            except asyncio.CancelledError:
+                # Task cancelled - exit cleanly
+                break
+            except ConnectionResetError:
+                # Connection reset by peer
+                logger.debug(f"Connection reset for {client_id}")
+                break
             except Exception as e:
-                # Connection closed or error
-                if "disconnect" in str(e).lower() or "closed" in str(e).lower():
+                # Check for known disconnect exception types from different WebSocket libraries
+                exc_name = type(e).__name__.lower()
+                exc_msg = str(e).lower()
+                if any(term in exc_name for term in ("disconnect", "closed", "connection")):
                     break
-                logger.error(f"Message error for {client_id}: {e}")
+                if any(term in exc_msg for term in ("disconnect", "closed", "websocket close")):
+                    break
+                logger.error(f"Message error for {client_id}: {type(e).__name__}: {e}")
                 break
 
     async def _handle_message(
@@ -339,9 +380,14 @@ class WebSocketServer:
 
         except json.JSONDecodeError:
             await self._send_error(websocket, "Invalid JSON", client_id)
-        except Exception as e:
-            logger.error(f"Handle message error: {e}")
-            await self._send_error(websocket, str(e), client_id)
+        except (KeyError, TypeError, ValueError) as e:
+            # Data validation errors from malformed messages
+            logger.warning(f"Invalid message format from {client_id}: {type(e).__name__}: {e}")
+            await self._send_error(websocket, f"Invalid message format: {e}", client_id)
+        except (ConnectionResetError, BrokenPipeError, OSError) as e:
+            # Connection errors - client disconnected during handling
+            logger.debug(f"Connection error in handle_message for {client_id}: {type(e).__name__}")
+            raise  # Re-raise to trigger disconnect in message loop
 
     async def _handle_subscribe(
         self, client_id: str, patterns: list[str]
@@ -349,7 +395,8 @@ class WebSocketServer:
         """Handle subscription request."""
         conn_info = await self._conn_manager.get(client_id)
         if conn_info:
-            conn_info.subscriptions.update(patterns)
+            # Use thread-safe method to avoid race with forward_to_client
+            await conn_info.add_subscriptions(patterns)
             logger.debug(f"Client {client_id} subscribed to: {patterns}")
 
     async def _handle_unsubscribe(
@@ -358,7 +405,8 @@ class WebSocketServer:
         """Handle unsubscription request."""
         conn_info = await self._conn_manager.get(client_id)
         if conn_info:
-            conn_info.subscriptions.difference_update(patterns)
+            # Use thread-safe method to avoid race with forward_to_client
+            await conn_info.remove_subscriptions(patterns)
             logger.debug(f"Client {client_id} unsubscribed from: {patterns}")
 
     async def _setup_client_subscription(
@@ -372,8 +420,12 @@ class WebSocketServer:
             if not conn_info:
                 return
 
+            # Get snapshot of subscriptions to avoid race condition during iteration
+            # (2026 edge case fix: prevents concurrent modification)
+            subscriptions = await conn_info.get_subscriptions_snapshot()
+
             # Check if event matches any subscription
-            for pattern in conn_info.subscriptions:
+            for pattern in subscriptions:
                 if event.matches_pattern(pattern):
                     try:
                         ws = self._connections.get(client_id)
@@ -384,8 +436,12 @@ class WebSocketServer:
                                     "event": event.to_dict(),
                                 })
                             )
-                    except Exception as e:
-                        logger.error(f"Forward error to {client_id}: {e}")
+                    except (ConnectionResetError, BrokenPipeError, OSError) as e:
+                        # Client disconnected - will be cleaned up by message loop
+                        logger.debug(f"Forward failed (disconnected) {client_id}: {type(e).__name__}")
+                    except (TypeError, ValueError) as e:
+                        # Serialization error - log but don't crash
+                        logger.warning(f"Event serialization error for {client_id}: {e}")
                     break
 
         # Subscribe to all events and filter in handler
@@ -418,7 +474,8 @@ class WebSocketServer:
             await websocket.send_text(
                 json.dumps({"type": "error", "message": message})
             )
-        except Exception:
+        except (ConnectionResetError, BrokenPipeError, OSError):
+            # Client disconnected - can't send error, that's fine
             pass
 
     async def _heartbeat_loop(self) -> None:
@@ -438,14 +495,15 @@ class WebSocketServer:
                 for client_id, ws in list(self._connections.items()):
                     try:
                         await ws.send_text(message)
-                    except Exception:
-                        # Connection dead, will be cleaned up
+                    except (ConnectionResetError, BrokenPipeError, OSError):
+                        # Connection dead, will be cleaned up by cleanup loop
                         pass
 
             except asyncio.CancelledError:
                 break
-            except Exception as e:
-                logger.error(f"Heartbeat error: {e}")
+            except (RuntimeError, OSError) as e:
+                # Event loop issues or system errors - log and continue
+                logger.error(f"Heartbeat error: {type(e).__name__}: {e}")
 
     async def _cleanup_loop(self) -> None:
         """Periodically clean up idle connections."""
@@ -459,7 +517,8 @@ class WebSocketServer:
                     if ws:
                         try:
                             await ws.close(1000, "Idle timeout")
-                        except Exception:
+                        except (ConnectionResetError, BrokenPipeError, OSError):
+                            # Already disconnected - that's fine
                             pass
                     await self._disconnect(client_id)
 
@@ -468,8 +527,9 @@ class WebSocketServer:
 
             except asyncio.CancelledError:
                 break
-            except Exception as e:
-                logger.error(f"Cleanup error: {e}")
+            except (RuntimeError, OSError) as e:
+                # Event loop issues or system errors - log and continue
+                logger.error(f"Cleanup error: {type(e).__name__}: {e}")
 
     def _get_client_ip(self, websocket: Any) -> str:
         """Extract client IP from websocket."""
@@ -481,7 +541,8 @@ class WebSocketServer:
                 client = websocket.scope.get("client")
                 if client:
                     return client[0]
-        except Exception:
+        except (AttributeError, KeyError, IndexError, TypeError):
+            # Attribute access or indexing failed - websocket lib variation
             pass
         return "unknown"
 
@@ -493,7 +554,8 @@ class WebSocketServer:
             if hasattr(websocket, "scope"):
                 headers = dict(websocket.scope.get("headers", []))
                 return headers.get(b"origin", b"").decode()
-        except Exception:
+        except (AttributeError, KeyError, TypeError, UnicodeDecodeError):
+            # Attribute access, key lookup or decoding failed - websocket lib variation
             pass
         return None
 
@@ -608,8 +670,17 @@ class WebSocketClient:
             logger.info(f"Connected to {self.url}")
             return True
 
-        except Exception as e:
-            logger.error(f"Connection failed: {e}")
+        except asyncio.TimeoutError:
+            logger.error(f"Connection timeout to {self.url}")
+            self._connected = False
+            return False
+        except (ConnectionRefusedError, ConnectionResetError, OSError) as e:
+            logger.error(f"Connection failed to {self.url}: {type(e).__name__}: {e}")
+            self._connected = False
+            return False
+        except (json.JSONDecodeError, KeyError) as e:
+            # Auth response parsing failed
+            logger.error(f"Invalid auth response from {self.url}: {e}")
             self._connected = False
             return False
 
@@ -627,7 +698,8 @@ class WebSocketClient:
         if self._websocket:
             try:
                 await self._websocket.close()
-            except Exception:
+            except (ConnectionResetError, BrokenPipeError, OSError):
+                # Already closed - that's fine during disconnect
                 pass
 
         logger.info("Disconnected")
@@ -720,12 +792,17 @@ class WebSocketClient:
                 elif msg_type == "error":
                     logger.warning(f"Server error: {msg.get('message')}")
 
-            except Exception as e:
+            except (ConnectionResetError, BrokenPipeError, OSError) as e:
+                # Connection lost - attempt reconnect if enabled
                 if self._connected:
-                    logger.error(f"Receive error: {e}")
+                    logger.warning(f"Connection lost: {type(e).__name__}")
                     self._connected = False
                     await self._schedule_reconnect()
                 break
+            except json.JSONDecodeError as e:
+                # Invalid message from server - log but continue
+                logger.warning(f"Invalid JSON from server: {e}")
+                continue
 
     async def _dispatch(self, event: SemanticEvent) -> None:
         """Dispatch event to registered handlers."""
@@ -737,8 +814,12 @@ class WebSocketClient:
                             await handler(event)
                         else:
                             handler(event)
-                    except Exception as e:
-                        logger.error(f"Handler error: {e}")
+                    except (TypeError, ValueError, KeyError, AttributeError) as e:
+                        # User handler data access errors - log and continue
+                        logger.warning(f"Handler data error for {pattern}: {type(e).__name__}: {e}")
+                    except RuntimeError as e:
+                        # Handler runtime errors (async issues, etc.)
+                        logger.error(f"Handler runtime error for {pattern}: {e}")
 
     async def _schedule_reconnect(self) -> None:
         """Schedule a reconnection attempt."""

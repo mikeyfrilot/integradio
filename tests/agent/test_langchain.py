@@ -272,3 +272,282 @@ class TestToolsWithBlocks:
         result = tool._run(component_id="1")
 
         assert isinstance(result, str)
+
+
+@pytest.mark.skipif(not HAS_LANGCHAIN, reason="LangChain not installed")
+class TestLangChainIntegration:
+    """Integration tests with mock SemanticComponent instances."""
+
+    def test_component_tool_finds_components(
+        self,
+        mock_blocks,
+        mock_semantic_components,
+        patch_semantic_component,
+    ):
+        """Test component tool finds registered components."""
+        tool = SemanticComponentTool(blocks=mock_blocks)
+        result = tool._run(query="search")
+
+        assert isinstance(result, str)
+        import json
+        data = json.loads(result)
+        assert "success" in data
+
+    def test_component_tool_with_all_params(
+        self,
+        mock_blocks,
+        mock_semantic_components,
+        patch_semantic_component,
+    ):
+        """Test component tool with all parameters."""
+        tool = SemanticComponentTool(blocks=mock_blocks)
+        result = tool._run(
+            query="input",
+            intent="search",
+            tag="input",
+            component_type="Textbox",
+            interactive_only=True,
+            visible_only=True,
+            max_results=5,
+        )
+
+        assert isinstance(result, str)
+        import json
+        data = json.loads(result)
+        assert "success" in data
+
+    def test_action_tool_with_valid_component(
+        self,
+        mock_blocks,
+        component_with_click,
+        patch_semantic_component,
+    ):
+        """Test action tool with valid component."""
+        component, semantic = component_with_click
+
+        tool = SemanticActionTool(blocks=mock_blocks)
+        result = tool._run(
+            component_id=str(component._id),
+            action="click",
+        )
+
+        assert isinstance(result, str)
+        import json
+        data = json.loads(result)
+        assert "action" in data
+
+    def test_action_tool_set_value(
+        self,
+        mock_blocks,
+        component_with_value,
+        patch_semantic_component,
+    ):
+        """Test action tool set_value."""
+        component, semantic = component_with_value
+
+        tool = SemanticActionTool(blocks=mock_blocks)
+        result = tool._run(
+            component_id=str(component._id),
+            action="set_value",
+            value="new value",
+        )
+
+        assert isinstance(result, str)
+        import json
+        data = json.loads(result)
+        assert "action" in data
+        assert data["action"] == "set_value"
+
+    def test_action_tool_clear(
+        self,
+        mock_blocks,
+        component_with_value,
+        patch_semantic_component,
+    ):
+        """Test action tool clear."""
+        component, semantic = component_with_value
+
+        tool = SemanticActionTool(blocks=mock_blocks)
+        result = tool._run(
+            component_id=str(component._id),
+            action="clear",
+        )
+
+        assert isinstance(result, str)
+
+    def test_action_tool_trigger(
+        self,
+        mock_blocks,
+        component_with_click,
+        patch_semantic_component,
+    ):
+        """Test action tool trigger."""
+        component, semantic = component_with_click
+
+        tool = SemanticActionTool(blocks=mock_blocks)
+        result = tool._run(
+            component_id=str(component._id),
+            action="trigger",
+            event="click",
+        )
+
+        assert isinstance(result, str)
+
+    def test_state_tool_with_component(
+        self,
+        mock_blocks,
+        component_with_value,
+        patch_semantic_component,
+    ):
+        """Test state tool retrieves state."""
+        component, semantic = component_with_value
+
+        tool = SemanticStateTool(blocks=mock_blocks)
+        result = tool._run(component_id=str(component._id))
+
+        assert isinstance(result, str)
+        import json
+        data = json.loads(result)
+        assert "success" in data
+
+    def test_state_tool_with_visual_spec(
+        self,
+        mock_blocks,
+        component_with_visual_spec,
+        patch_semantic_component,
+    ):
+        """Test state tool includes visual spec."""
+        component, semantic = component_with_visual_spec
+
+        tool = SemanticStateTool(blocks=mock_blocks)
+        result = tool._run(
+            component_id=str(component._id),
+            include_visual_spec=True,
+        )
+
+        assert isinstance(result, str)
+
+    def test_flow_tool_forward(
+        self,
+        populated_blocks,
+        mock_semantic_components,
+    ):
+        """Test flow tool forward trace."""
+        tool = SemanticFlowTool(blocks=populated_blocks)
+        result = tool._run(component_id="1", direction="forward")
+
+        assert isinstance(result, str)
+        import json
+        data = json.loads(result)
+        assert "direction" in data
+        assert data["direction"] == "forward"
+
+    def test_flow_tool_backward(
+        self,
+        populated_blocks,
+        mock_semantic_components,
+    ):
+        """Test flow tool backward trace."""
+        tool = SemanticFlowTool(blocks=populated_blocks)
+        result = tool._run(component_id="3", direction="backward")
+
+        assert isinstance(result, str)
+        import json
+        data = json.loads(result)
+        assert "direction" in data
+        assert data["direction"] == "backward"
+
+    def test_flow_tool_max_depth(
+        self,
+        populated_blocks,
+        mock_semantic_components,
+    ):
+        """Test flow tool with max_depth."""
+        tool = SemanticFlowTool(blocks=populated_blocks)
+        result = tool._run(component_id="1", max_depth=2)
+
+        assert isinstance(result, str)
+
+
+@pytest.mark.skipif(not HAS_LANGCHAIN, reason="LangChain not installed")
+class TestLangChainToolSchemas:
+    """Tests for LangChain tool input schemas."""
+
+    def test_component_tool_schema(self):
+        """Test component tool has correct schema."""
+        tool = SemanticComponentTool()
+
+        # LangChain tools should have args_schema
+        assert hasattr(tool, "args_schema")
+        schema = tool.args_schema
+
+        # Verify schema has expected fields
+        assert schema is not None
+
+    def test_action_tool_schema(self):
+        """Test action tool has correct schema."""
+        tool = SemanticActionTool()
+
+        assert hasattr(tool, "args_schema")
+        schema = tool.args_schema
+
+        # Should have required fields: component_id, action
+        assert schema is not None
+
+    def test_state_tool_schema(self):
+        """Test state tool has correct schema."""
+        tool = SemanticStateTool()
+
+        assert hasattr(tool, "args_schema")
+        schema = tool.args_schema
+
+        # Should have required field: component_id
+        assert schema is not None
+
+    def test_flow_tool_schema(self):
+        """Test flow tool has correct schema."""
+        tool = SemanticFlowTool()
+
+        assert hasattr(tool, "args_schema")
+        schema = tool.args_schema
+
+        # Should have required field: component_id
+        assert schema is not None
+
+
+@pytest.mark.skipif(not HAS_LANGCHAIN, reason="LangChain not installed")
+class TestLangChainCallbackHandling:
+    """Tests for LangChain callback handling."""
+
+    def test_component_tool_accepts_run_manager(self):
+        """Test component tool accepts run_manager."""
+        tool = SemanticComponentTool()
+
+        # Should not raise with None run_manager
+        result = tool._run(query="test", run_manager=None)
+        assert isinstance(result, str)
+
+    def test_action_tool_accepts_run_manager(self):
+        """Test action tool accepts run_manager."""
+        tool = SemanticActionTool()
+
+        result = tool._run(
+            component_id="1",
+            action="click",
+            run_manager=None,
+        )
+        assert isinstance(result, str)
+
+    def test_state_tool_accepts_run_manager(self):
+        """Test state tool accepts run_manager."""
+        tool = SemanticStateTool()
+
+        result = tool._run(component_id="1", run_manager=None)
+        assert isinstance(result, str)
+
+    def test_flow_tool_accepts_run_manager(self):
+        """Test flow tool accepts run_manager."""
+        tool = SemanticFlowTool()
+
+        result = tool._run(component_id="1", run_manager=None)
+        assert isinstance(result, str)

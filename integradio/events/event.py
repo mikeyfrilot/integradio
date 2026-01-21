@@ -118,20 +118,45 @@ class SemanticEvent:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "SemanticEvent":
-        """Create event from CloudEvents JSON format."""
+        """Create event from CloudEvents JSON format.
+
+        Raises:
+            ValueError: If required fields are missing or data is invalid
+        """
+        # Edge case validation (2026 defensive programming)
+        if not isinstance(data, dict):
+            raise ValueError("Event data must be a dictionary")
+
+        # Required fields validation
+        if "type" not in data or not data["type"]:
+            raise ValueError("Missing required field: type")
+        if "source" not in data or not data["source"]:
+            raise ValueError("Missing required field: source")
+
+        # Type safety for critical fields
+        event_type = str(data["type"]) if data["type"] else ""
+        event_source = str(data["source"]) if data["source"] else ""
+
+        # Edge case: ensure tags is a list
+        tags = data.get("semantictags", [])
+        if tags is None:
+            tags = []
+        elif not isinstance(tags, list):
+            tags = [str(tags)]
+
         return cls(
-            specversion=data.get("specversion", "1.0"),
-            type=data["type"],
-            source=data["source"],
-            id=data.get("id", str(uuid.uuid4())),
-            time=data.get("time", datetime.now(timezone.utc).isoformat()),
-            datacontenttype=data.get("datacontenttype", "application/json"),
+            specversion=str(data.get("specversion", "1.0")),
+            type=event_type,
+            source=event_source,
+            id=str(data.get("id", str(uuid.uuid4()))),
+            time=str(data.get("time", datetime.now(timezone.utc).isoformat())),
+            datacontenttype=str(data.get("datacontenttype", "application/json")),
             data=data.get("data"),
             subject=data.get("subject"),
-            nonce=data.get("semanticnonce", uuid.uuid4().hex[:16]),
+            nonce=str(data.get("semanticnonce", uuid.uuid4().hex[:16])),
             signature=data.get("semanticsignature"),
             intent=data.get("semanticintent"),
-            tags=data.get("semantictags", []),
+            tags=tags,
             correlation_id=data.get("semanticcorrelationid"),
         )
 
@@ -183,11 +208,25 @@ class SemanticEvent:
             True if event is expired
         """
         try:
-            event_time = datetime.fromisoformat(self.time.replace("Z", "+00:00"))
+            # Edge case: Handle various ISO 8601 formats (2026 best practices)
+            time_str = self.time
+            if not time_str or not isinstance(time_str, str):
+                return True  # Invalid timestamp = expired
+
+            # Handle Z suffix (UTC indicator)
+            if time_str.endswith("Z"):
+                time_str = time_str[:-1] + "+00:00"
+
+            event_time = datetime.fromisoformat(time_str)
+
+            # Edge case: Ensure timezone awareness
+            if event_time.tzinfo is None:
+                event_time = event_time.replace(tzinfo=timezone.utc)
+
             now = datetime.now(timezone.utc)
             age = (now - event_time).total_seconds()
             return age > max_age_seconds or age < -60  # Also reject future times
-        except (ValueError, TypeError):
+        except (ValueError, TypeError, AttributeError):
             return True  # Invalid timestamp = expired
 
     def __repr__(self) -> str:

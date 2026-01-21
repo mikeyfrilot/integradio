@@ -294,6 +294,71 @@ class TestAPIWithoutFastAPI:
         # The function should exist regardless
         assert callable(create_api_routes)
 
+    def test_starlette_fallback_import_path(self):
+        """Test Starlette fallback when FastAPI import fails inside create_api_routes.
+
+        The imports happen inside create_api_routes(), so we patch them at call time.
+        """
+        import sys
+        import builtins
+        from unittest.mock import MagicMock
+
+        # Create mock blocks
+        from integradio.registry import ComponentMetadata
+        mock_blocks = MagicMock()
+        mock_blocks.registry = MagicMock()
+        mock_blocks.registry.get.return_value = ComponentMetadata(
+            component_id=1,
+            component_type="Textbox",
+            intent="test",
+        )
+        mock_blocks.registry.get_relationships.return_value = {}
+        mock_blocks.registry.get_dataflow.return_value = {"upstream": [], "downstream": []}
+        mock_blocks.registry.all_components.return_value = []
+        mock_blocks.search.return_value = []
+        mock_blocks.map.return_value = {"nodes": [], "links": []}
+
+        # Import FastAPI and test client before patching
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from integradio.api import create_api_routes
+
+        # Store original import function
+        original_import = builtins.__import__
+
+        def mock_import(name, globals=None, locals=None, fromlist=(), level=0):
+            # Fail on fastapi import to trigger starlette fallback
+            if name == "fastapi":
+                raise ImportError("No module named 'fastapi'")
+            return original_import(name, globals, locals, fromlist, level)
+
+        # Remove cached fastapi modules so the import fallback is triggered
+        fastapi_cached = {}
+        for key in list(sys.modules.keys()):
+            if key == "fastapi" or key.startswith("fastapi."):
+                fastapi_cached[key] = sys.modules.pop(key)
+
+        try:
+            # Patch import to fail on fastapi during create_api_routes call
+            builtins.__import__ = mock_import
+
+            # Create FastAPI app - BUT note the app object already exists
+            # We need to use a mock app that has the .get decorator
+            mock_app = MagicMock()
+
+            # Call create_api_routes with patched imports - this triggers lines 38-42
+            create_api_routes(mock_app, mock_blocks)
+
+            # Verify decorators were called
+            assert mock_app.get.called
+
+        finally:
+            # Restore import
+            builtins.__import__ = original_import
+
+            # Restore fastapi modules
+            sys.modules.update(fastapi_cached)
+
 
 # ============================================================================
 # EDGE CASES - More comprehensive coverage
@@ -388,12 +453,54 @@ class TestAPIEndpointEdgeCases:
         assert mock_blocks.search.call_args[1]["k"] == 1000
 
     def test_search_negative_k_handled(self, client, mock_blocks):
-        """Search handles negative k (FastAPI may coerce or error)."""
+        """Search handles negative k (gets clamped to MIN_SEARCH_RESULTS=1)."""
         # FastAPI will try to parse negative k as int
         response = client.get("/semantic/search?q=test&k=-1")
 
-        # Should not crash - behavior depends on validation
-        assert response.status_code in [200, 422]  # 422 for validation error
+        # With input validation, negative k gets clamped to 1
+        assert response.status_code == 200
+        # Verify k was clamped to MIN_SEARCH_RESULTS (1)
+        call_args = mock_blocks.search.call_args
+        assert call_args[1]["k"] == 1
+
+    def test_search_k_exceeds_max_clamped(self, client, mock_blocks):
+        """Search clamps k to MAX_SEARCH_RESULTS (1000) when exceeded."""
+        response = client.get("/semantic/search?q=test&k=5000")
+
+        assert response.status_code == 200
+        # Verify k was clamped to MAX_SEARCH_RESULTS (1000)
+        call_args = mock_blocks.search.call_args
+        assert call_args[1]["k"] == 1000
+
+    def test_search_query_too_long(self, client, mock_blocks):
+        """Search returns 400 for query exceeding MAX_QUERY_LENGTH."""
+        # MAX_QUERY_LENGTH is 1000 characters
+        long_query = "x" * 1001
+
+        response = client.get(f"/semantic/search?q={long_query}")
+
+        assert response.status_code == 400
+        data = response.json()
+        assert "error" in data
+        assert "1000" in data["error"]  # Should mention the limit
+
+    def test_component_negative_id(self, client, mock_blocks):
+        """Component endpoint returns 400 for negative component ID."""
+        response = client.get("/semantic/component/-1")
+
+        assert response.status_code == 400
+        data = response.json()
+        assert "error" in data
+        assert "non-negative" in data["error"]
+
+    def test_trace_negative_id(self, client, mock_blocks):
+        """Trace endpoint returns 400 for negative component ID."""
+        response = client.get("/semantic/trace/-1")
+
+        assert response.status_code == 400
+        data = response.json()
+        assert "error" in data
+        assert "non-negative" in data["error"]
 
     def test_component_zero_id(self, client, mock_blocks):
         """Component endpoint handles ID of 0."""

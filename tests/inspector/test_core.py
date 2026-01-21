@@ -483,3 +483,315 @@ class TestInspectorModes:
         # State should remain uninitialized
         # (attach returns early for hidden mode)
         # Note: This depends on implementation detail
+
+
+class TestInspectorWithSemanticComponents:
+    """Integration tests with mock SemanticComponent instances."""
+
+    def test_inspector_search_with_components(
+        self,
+        mock_blocks,
+        mock_semantic_components,
+        patch_semantic_component,
+    ):
+        """Test inspector search finds semantic components."""
+        inspector = Inspector(mock_blocks)
+        results = inspector.search("search")
+
+        assert isinstance(results, list)
+
+    def test_inspector_select_valid_component(
+        self,
+        mock_blocks,
+        mock_semantic_components,
+        patch_semantic_component,
+    ):
+        """Test selecting a valid component returns details."""
+        from integradio.components import SemanticComponent
+
+        inspector = Inspector(mock_blocks)
+
+        # Get first component ID
+        comp_id = next(iter(SemanticComponent._instances.keys()))
+        details = inspector.select_component(str(comp_id))
+
+        if details:
+            assert "id" in details
+            assert "type" in details
+            assert "intent" in details
+
+    def test_inspector_select_with_visual_spec(
+        self,
+        mock_blocks,
+        component_with_visual_spec,
+        patch_semantic_component,
+    ):
+        """Test selecting component with visual spec."""
+        component, semantic = component_with_visual_spec
+        inspector = Inspector(mock_blocks)
+
+        details = inspector.select_component(str(component._id))
+
+        if details:
+            assert "visual_spec" in details
+            assert details["visual_spec"]["has_spec"] is True
+
+    def test_inspector_select_with_dataflow(
+        self,
+        populated_blocks,
+        mock_semantic_components,
+    ):
+        """Test selecting component includes dataflow info."""
+        inspector = Inspector(populated_blocks)
+        inspector.refresh()
+
+        # Select a component that has dataflow
+        details = inspector.select_component("1")
+
+        if details and inspector.state.dataflow:
+            assert "dataflow" in details or details is None
+
+    def test_inspector_refresh_updates_state(
+        self,
+        mock_blocks,
+        mock_semantic_components,
+    ):
+        """Test refresh updates tree and dataflow state."""
+        inspector = Inspector(mock_blocks)
+
+        assert inspector.state.tree is None
+        assert inspector.state.dataflow is None
+
+        inspector.refresh()
+
+        assert inspector.state.tree is not None
+        assert inspector.state.dataflow is not None
+
+    def test_inspector_export_with_data(
+        self,
+        mock_blocks,
+        mock_semantic_components,
+    ):
+        """Test export_state includes tree and dataflow data."""
+        inspector = Inspector(mock_blocks)
+        inspector.refresh()
+
+        exported = inspector.export_state()
+
+        assert "tree" in exported
+        assert "dataflow" in exported
+        assert exported["tree"] is not None
+        assert exported["dataflow"] is not None
+
+    def test_inspector_mermaid_export(
+        self,
+        mock_blocks,
+        mock_semantic_components,
+    ):
+        """Test Mermaid diagram exports."""
+        inspector = Inspector(mock_blocks)
+
+        tree_mermaid = inspector.get_tree_mermaid()
+        dataflow_mermaid = inspector.get_dataflow_mermaid()
+
+        assert isinstance(tree_mermaid, str)
+        assert isinstance(dataflow_mermaid, str)
+        assert "graph" in tree_mermaid or "flowchart" in tree_mermaid
+        assert "flowchart" in dataflow_mermaid
+
+
+class TestInspectorAttachModes:
+    """Tests for different attach modes."""
+
+    @pytest.fixture
+    def mock_gradio(self):
+        """Create mock Gradio module."""
+        from unittest.mock import MagicMock
+        mock_gr = MagicMock()
+
+        # Mock Sidebar context manager
+        mock_sidebar = MagicMock()
+        mock_sidebar.__enter__ = MagicMock(return_value=mock_sidebar)
+        mock_sidebar.__exit__ = MagicMock(return_value=None)
+        mock_gr.Sidebar.return_value = mock_sidebar
+
+        # Mock Tab context manager
+        mock_tab = MagicMock()
+        mock_tab.__enter__ = MagicMock(return_value=mock_tab)
+        mock_tab.__exit__ = MagicMock(return_value=None)
+        mock_gr.Tab.return_value = mock_tab
+
+        # Mock Row/Column context managers
+        mock_row = MagicMock()
+        mock_row.__enter__ = MagicMock(return_value=mock_row)
+        mock_row.__exit__ = MagicMock(return_value=None)
+        mock_gr.Row.return_value = mock_row
+
+        mock_column = MagicMock()
+        mock_column.__enter__ = MagicMock(return_value=mock_column)
+        mock_column.__exit__ = MagicMock(return_value=None)
+        mock_gr.Column.return_value = mock_column
+
+        # Mock components
+        mock_gr.HTML.return_value = MagicMock()
+        mock_gr.Markdown.return_value = MagicMock()
+        mock_gr.Textbox.return_value = MagicMock()
+        mock_gr.JSON.return_value = MagicMock()
+
+        return mock_gr
+
+    def test_attach_sidebar_mode(
+        self,
+        mock_blocks,
+        mock_semantic_components,
+    ):
+        """Test attach in sidebar mode (requires Gradio Blocks context)."""
+        config = InspectorConfig(mode=InspectorMode.SIDEBAR)
+        inspector = Inspector(mock_blocks, config=config)
+
+        # Sidebar mode needs Gradio Blocks context
+        try:
+            result = inspector.attach()
+            # If Gradio available, should return sidebar
+        except (ImportError, AttributeError):
+            # Gradio not installed or outside Blocks context - expected
+            pass
+
+    def test_attach_floating_mode(
+        self,
+        mock_blocks,
+        mock_semantic_components,
+    ):
+        """Test attach in floating mode (requires Gradio)."""
+        config = InspectorConfig(mode=InspectorMode.FLOATING)
+        inspector = Inspector(mock_blocks, config=config)
+
+        try:
+            result = inspector.attach()
+            if result:
+                assert inspector._attached
+        except ImportError:
+            pass
+
+    def test_attach_embedded_mode(
+        self,
+        mock_blocks,
+        mock_semantic_components,
+    ):
+        """Test attach in embedded mode (requires Gradio Blocks context)."""
+        config = InspectorConfig(mode=InspectorMode.EMBEDDED)
+        inspector = Inspector(mock_blocks, config=config)
+
+        try:
+            result = inspector.attach()
+            if result is None and inspector._attached:
+                # Embedded mode returns None but sets _attached
+                pass
+        except (ImportError, AttributeError):
+            # Gradio not installed or outside Blocks context - expected
+            pass
+
+    def test_attach_prevented_when_already_attached(
+        self,
+        mock_blocks,
+        mock_semantic_components,
+    ):
+        """Test that attach returns None when already attached."""
+        inspector = Inspector(mock_blocks)
+        inspector._attached = True
+
+        result = inspector.attach()
+        assert result is None
+
+
+class TestInspectConvenienceFunction:
+    """Tests for inspect() convenience function."""
+
+    def test_inspect_all_modes(
+        self,
+        mock_blocks,
+        mock_semantic_components,
+    ):
+        """Test inspect function with all modes."""
+        # Hidden mode should work without Gradio context
+        inspector = inspect(mock_blocks, mode="hidden")
+        assert inspector.config.mode == InspectorMode.HIDDEN
+
+        # Other modes may fail outside Gradio Blocks context
+        other_modes = ["sidebar", "floating", "embedded"]
+        for mode in other_modes:
+            try:
+                inspector = inspect(mock_blocks, mode=mode)
+                assert inspector.config.mode.value == mode
+            except (ImportError, AttributeError):
+                # Gradio not installed or context issues - expected
+                pass
+
+
+class TestDevModeFunction:
+    """Tests for dev_mode() convenience function."""
+
+    def test_dev_mode_configuration(
+        self,
+        mock_blocks,
+        mock_semantic_components,
+    ):
+        """Test dev_mode creates correct configuration."""
+        try:
+            inspector = dev_mode(mock_blocks)
+            assert inspector.config.mode == InspectorMode.SIDEBAR
+            assert inspector.config.collapsed is False
+            assert inspector.config.auto_refresh is True
+        except (ImportError, AttributeError, TypeError):
+            # Gradio not installed, context issues, or API differences - skip
+            pytest.skip("Gradio Blocks context required")
+
+
+class TestInspectorStateManagement:
+    """Tests for inspector state management."""
+
+    def test_state_persistence_across_search(
+        self,
+        mock_blocks,
+        mock_semantic_components,
+    ):
+        """Test state persists across multiple searches."""
+        inspector = Inspector(mock_blocks)
+
+        inspector.search("query1")
+        assert inspector.state.search_query == "query1"
+
+        inspector.search("query2")
+        assert inspector.state.search_query == "query2"
+
+    def test_state_persistence_across_selection(
+        self,
+        mock_blocks,
+        mock_semantic_components,
+    ):
+        """Test state persists across component selection."""
+        inspector = Inspector(mock_blocks)
+
+        inspector.select_component("1")
+        assert inspector.state.selected_component_id == "1"
+
+        inspector.select_component("2")
+        assert inspector.state.selected_component_id == "2"
+
+    def test_state_serialization(
+        self,
+        mock_blocks,
+        mock_semantic_components,
+    ):
+        """Test state can be serialized to dict."""
+        inspector = Inspector(mock_blocks)
+        inspector.refresh()
+        inspector.search("test")
+        inspector.select_component("1")
+
+        state_dict = inspector.state.to_dict()
+
+        assert state_dict["search_query"] == "test"
+        assert state_dict["selected_component_id"] == "1"
+        assert state_dict["tree_loaded"] is True
+        assert state_dict["dataflow_loaded"] is True

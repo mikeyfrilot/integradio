@@ -17,19 +17,43 @@ import gradio as gr
 
 from ..components import semantic
 from ..blocks import SemanticBlocks
+from ..ux import create_confirmation_dialog
 
 
 @dataclass
 class GalleryConfig:
     """Configuration for gallery interface."""
     title: str = "Gallery"
-    columns: int = 4
+    columns: int = 4  # Desktop default; responsive CSS handles mobile
     height: int = 600
     allow_upload: bool = True
     show_metadata: bool = True
     show_download: bool = True
     categories: list[str] = field(default_factory=lambda: ["All", "Photos", "AI Generated", "Favorites"])
     preview_size: tuple[int, int] = (800, 600)
+
+
+# Responsive CSS for gallery - columns adjust based on screen width (2026 best practice)
+GALLERY_RESPONSIVE_CSS = """
+/* Responsive gallery columns */
+@media (max-width: 640px) {
+    #main-gallery .gallery {
+        grid-template-columns: repeat(2, 1fr) !important;
+    }
+}
+
+@media (min-width: 641px) and (max-width: 1024px) {
+    #main-gallery .gallery {
+        grid-template-columns: repeat(3, 1fr) !important;
+    }
+}
+
+@media (min-width: 1025px) {
+    #main-gallery .gallery {
+        grid-template-columns: repeat(4, 1fr) !important;
+    }
+}
+"""
 
 
 def create_gallery_grid(
@@ -60,13 +84,13 @@ def create_gallery_grid(
         tags=["header"],
     )
 
-    # Toolbar
+    # Toolbar - accessible labels retained for screen readers
     with gr.Row():
         with gr.Column(scale=3):
             components["search"] = semantic(
                 gr.Textbox(
                     placeholder="Search images...",
-                    label="",
+                    label="Search gallery",
                     elem_id="gallery-search",
                     show_label=False,
                 ),
@@ -123,7 +147,7 @@ def create_gallery_grid(
             components["gallery"] = semantic(
                 gr.Gallery(
                     value=initial_images,
-                    label="",
+                    label="Image gallery",
                     columns=config.columns,
                     height=config.height,
                     object_fit="cover",
@@ -160,21 +184,46 @@ def create_gallery_grid(
 
             with gr.Row():
                 components["favorite_btn"] = semantic(
-                    gr.Button("❤️ Favorite", size="sm"),
+                    gr.Button("❤️ Favorite"),
                     intent="adds image to favorites collection",
                     tags=["action", "favorite"],
                 )
 
                 components["delete_btn"] = semantic(
-                    gr.Button("🗑️ Delete", size="sm", variant="stop"),
+                    gr.Button("🗑️ Delete", variant="stop"),
                     intent="removes image from gallery",
                     tags=["action", "delete", "destructive"],
                 )
 
-    # Pagination
+            # Confirmation dialog for delete (2026 UX best practice)
+            components["delete_confirm"] = gr.HTML(
+                "",
+                visible=False,
+                elem_id="delete-confirm-dialog",
+            )
+
+            # Wire up confirmation flow
+            def show_delete_confirm():
+                return gr.update(
+                    value=create_confirmation_dialog(
+                        title="Delete Image?",
+                        message="This will permanently remove the image from the gallery. This action cannot be undone.",
+                        confirm_label="Delete",
+                        cancel_label="Cancel",
+                        danger=True,
+                    ),
+                    visible=True,
+                )
+
+            components["delete_btn"].click(
+                fn=show_delete_confirm,
+                outputs=[components["delete_confirm"]],
+            )
+
+    # Pagination - default size for WCAG 2.2 touch target compliance
     with gr.Row():
         components["prev_btn"] = semantic(
-            gr.Button("← Previous", size="sm"),
+            gr.Button("← Previous"),
             intent="navigates to previous page of images",
             tags=["navigation", "pagination"],
         )
@@ -186,7 +235,7 @@ def create_gallery_grid(
         )
 
         components["next_btn"] = semantic(
-            gr.Button("Next →", size="sm"),
+            gr.Button("Next →"),
             intent="navigates to next page of images",
             tags=["navigation", "pagination"],
         )
@@ -252,10 +301,11 @@ class GalleryPage:
         self.blocks: Optional[SemanticBlocks] = None
 
     def build(self) -> SemanticBlocks:
-        """Build the gallery interface."""
+        """Build the gallery interface with responsive CSS."""
         self.blocks = SemanticBlocks(
             title=self.config.title,
             theme=gr.themes.Soft(),
+            css=GALLERY_RESPONSIVE_CSS,  # Responsive columns for mobile
         )
 
         with self.blocks:

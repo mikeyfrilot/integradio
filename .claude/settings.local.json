@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(wc:*)",
+      "Bash(find:*)",
+      "Bash(python -m pytest:*)",
+      "Bash(python:*)",
+      "Bash(cmd /c \"python -m pytest tests/test_websocket.py tests/test_events.py --cov=integradio.events --cov-report=term-missing 2>&1\")",
+      "Bash(powershell -Command \"cd F:/AI/integradio-dev; python -m pytest tests/test_websocket.py tests/test_events.py --cov=integradio.events --cov-report=term-missing -q 2>&1 | Select -First 100\")",
+      "Bash(powershell -Command \"cd F:/AI/integradio-dev; python -m pytest tests/test_websocket.py tests/test_events.py -q 2>&1\")",
+      "Bash(powershell -Command \"cd F:/AI/integradio-dev; python -m pytest tests/test_websocket.py tests/test_events.py -q --ignore-glob=tests/conftest.py --cov=integradio.events --cov-report=term-missing 2>&1\")",
+      "Bash(powershell -Command \"cd F:/AI/integradio-dev; python -m pytest tests/test_websocket.py tests/test_events.py tests/test_embedder.py -q 2>&1\":*)"
+    ]
+  }
+}

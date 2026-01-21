@@ -1005,3 +1005,446 @@ class TestPageIntegration:
         # build() should create new blocks each time
         # This tests that internal state is consistent
         assert page.blocks is blocks2
+
+
+# =============================================================================
+# Upload Security Tests
+# =============================================================================
+
+class TestUploadSecurity:
+    """Security tests for upload functionality."""
+
+    def test_sanitize_filename_basic(self):
+        """Test basic filename sanitization."""
+        from integradio.pages.upload import sanitize_filename
+
+        assert sanitize_filename("test.jpg") == "test.jpg"
+        assert sanitize_filename("my_file.png") == "my_file.png"
+        assert sanitize_filename("document-v2.pdf") == "document-v2.pdf"
+
+    def test_sanitize_filename_path_traversal(self):
+        """Test path traversal prevention."""
+        from integradio.pages.upload import sanitize_filename
+
+        # Path traversal attempts should be sanitized
+        assert sanitize_filename("../../../etc/passwd") == "passwd"
+        assert sanitize_filename("..\\..\\windows\\system32") == "system32"
+        assert sanitize_filename("/etc/passwd") == "passwd"
+
+    def test_sanitize_filename_null_bytes(self):
+        """Test null byte removal."""
+        from integradio.pages.upload import sanitize_filename
+
+        # Null bytes should be removed
+        result = sanitize_filename("test\x00.jpg")
+        assert "\x00" not in result
+
+    def test_sanitize_filename_empty(self):
+        """Test empty filename rejection."""
+        from integradio.pages.upload import sanitize_filename
+
+        with pytest.raises(ValueError, match="Empty filename"):
+            sanitize_filename("")
+
+    def test_sanitize_filename_dot(self):
+        """Test dot-only filenames are rejected."""
+        from integradio.pages.upload import sanitize_filename
+
+        with pytest.raises(ValueError, match="Invalid filename"):
+            sanitize_filename(".")
+
+        with pytest.raises(ValueError, match="Invalid filename"):
+            sanitize_filename("..")
+
+    def test_sanitize_filename_too_long(self):
+        """Test filename length validation."""
+        from integradio.pages.upload import sanitize_filename
+
+        long_name = "a" * 300 + ".txt"
+        with pytest.raises(ValueError, match="too long"):
+            sanitize_filename(long_name)
+
+    def test_sanitize_filename_blocked_extensions(self):
+        """Test blocked extension rejection."""
+        from integradio.pages.upload import sanitize_filename
+
+        dangerous_files = [
+            "virus.exe",
+            "script.bat",
+            "payload.cmd",
+            "shell.sh",
+            "hack.ps1",
+            "attack.vbs",
+            "malware.dll",
+            "backdoor.php",
+        ]
+
+        for filename in dangerous_files:
+            with pytest.raises(ValueError, match="not allowed"):
+                sanitize_filename(filename)
+
+    def test_sanitize_filename_double_extension(self):
+        """Test double extension blocking (e.g., file.jpg.exe)."""
+        from integradio.pages.upload import sanitize_filename
+
+        with pytest.raises(ValueError, match="not allowed"):
+            sanitize_filename("innocent.jpg.exe")
+
+        with pytest.raises(ValueError, match="not allowed"):
+            sanitize_filename("document.pdf.bat")
+
+    def test_sanitize_filename_special_chars_replaced(self):
+        """Test special characters are replaced."""
+        from integradio.pages.upload import sanitize_filename
+
+        # Characters not matching the safe pattern should be replaced with _
+        result = sanitize_filename("file<>:name.txt")
+        assert "<" not in result
+        assert ">" not in result
+        assert ":" not in result
+
+    def test_format_file_size(self):
+        """Test file size formatting."""
+        from integradio.pages.upload import _format_file_size
+
+        assert _format_file_size(0) == "0.0 B"
+        assert _format_file_size(500) == "500.0 B"
+        assert _format_file_size(1024) == "1.0 KB"
+        assert _format_file_size(1024 * 1024) == "1.0 MB"
+        assert _format_file_size(1024 * 1024 * 1024) == "1.0 GB"
+        assert _format_file_size(1024 * 1024 * 1024 * 1024) == "1.0 TB"
+
+    def test_get_file_type(self):
+        """Test file type detection."""
+        from integradio.pages.upload import _get_file_type
+
+        # Images
+        assert _get_file_type(".jpg") == "Image"
+        assert _get_file_type(".png") == "Image"
+        assert _get_file_type(".gif") == "Image"
+
+        # Videos
+        assert _get_file_type(".mp4") == "Video"
+        assert _get_file_type(".webm") == "Video"
+
+        # Audio
+        assert _get_file_type(".mp3") == "Audio"
+        assert _get_file_type(".wav") == "Audio"
+
+        # Documents
+        assert _get_file_type(".pdf") == "PDF"
+        assert _get_file_type(".doc") == "Document"
+        assert _get_file_type(".txt") == "Text"
+
+        # Unknown
+        assert _get_file_type(".xyz") == "File"
+
+
+# =============================================================================
+# Chat Response Handler Tests
+# =============================================================================
+
+class TestChatResponseHandlers:
+    """Tests for chat response handling edge cases."""
+
+    def test_chat_with_streaming_function(self):
+        """Test ChatPage with streaming chat function."""
+        def streaming_chat(message, history, system_prompt, temp, max_len):
+            yield "Hello"
+            yield " World"
+            yield "!"
+
+        page = ChatPage(chat_fn=streaming_chat, stream=True)
+        page.build()
+
+        assert page.chat_fn is streaming_chat
+        assert page.stream is True
+
+    def test_chat_with_non_streaming_function(self):
+        """Test ChatPage with non-streaming chat function."""
+        def simple_chat(message, history, system_prompt, temp, max_len):
+            return f"You said: {message}"
+
+        page = ChatPage(chat_fn=simple_chat, stream=False)
+        page.build()
+
+        assert page.stream is False
+
+    def test_chat_config_temperature_range(self):
+        """Test ChatConfig temperature values."""
+        config = ChatConfig(temperature=0.0)
+        assert config.temperature == 0.0
+
+        config = ChatConfig(temperature=2.0)
+        assert config.temperature == 2.0
+
+    def test_chat_without_system_prompt_display(self):
+        """Test ChatPage without system prompt display."""
+        page = ChatPage(show_system_prompt=False)
+        page.build()
+
+        assert "system_prompt" not in page.components
+
+    def test_chat_without_regenerate(self):
+        """Test ChatPage without regenerate button."""
+        page = ChatPage(enable_regenerate=False)
+        page.build()
+
+        assert "regenerate_btn" not in page.components
+
+    def test_chat_without_export(self):
+        """Test ChatPage without export button."""
+        page = ChatPage(enable_export=False)
+        page.build()
+
+        assert "export_btn" not in page.components
+
+    def test_chat_without_token_count(self):
+        """Test ChatPage without token count display."""
+        page = ChatPage(show_token_count=False)
+        page.build()
+
+        assert "token_display" not in page.components
+
+
+# =============================================================================
+# Upload Handler Edge Cases
+# =============================================================================
+
+class TestUploadHandlerEdgeCases:
+    """Tests for upload handler edge cases."""
+
+    def test_upload_config_defaults(self):
+        """Test UploadConfig default values."""
+        config = UploadConfig()
+
+        assert config.title == "Upload Center"
+        assert config.max_file_size == "100MB"
+        assert config.max_files == 10
+        assert config.show_preview is True
+        assert config.show_processing is True
+        assert config.auto_process is False
+        assert "image" in config.allowed_types
+        assert "video" in config.allowed_types
+        assert "audio" in config.allowed_types
+        assert "document" in config.allowed_types
+
+    def test_upload_with_image_only(self):
+        """Test UploadPage with image-only mode."""
+        page = UploadPage(allowed_types=["image"])
+        page.build()
+
+        assert "upload_image" in page.components
+        assert "upload_video" not in page.components
+        assert "upload_audio" not in page.components
+        assert "upload_doc" not in page.components
+
+    def test_upload_with_custom_max_files(self):
+        """Test UploadPage with custom max files limit."""
+        page = UploadPage(max_files=3)
+        page.build()
+
+        assert page.config.max_files == 3
+
+    def test_upload_with_preview_disabled(self):
+        """Test UploadPage with preview disabled."""
+        page = UploadPage(show_preview=False)
+        # Just instantiate - build behavior depends on implementation
+        assert page.config.show_preview is False
+
+    def test_uploaded_file_dataclass(self):
+        """Test UploadedFile dataclass."""
+        from integradio.pages.upload import UploadedFile
+
+        file = UploadedFile(
+            name="test.jpg",
+            size="1.5 MB",
+            type="Image",
+        )
+
+        assert file.name == "test.jpg"
+        assert file.status == "uploaded"
+        assert file.preview_url is None
+        assert file.metadata == {}
+
+
+# =============================================================================
+# Pages Utils Tests
+# =============================================================================
+
+class TestPagesUtils:
+    """Tests for pages/utils.py functions."""
+
+    def test_get_page_css(self):
+        """Test get_page_css returns CSS string."""
+        from integradio.pages.utils import get_page_css
+
+        css = get_page_css()
+        assert isinstance(css, str)
+        assert len(css) > 0
+
+    def test_get_enhanced_page_css(self):
+        """Test get_enhanced_page_css includes empty state CSS."""
+        from integradio.pages.utils import get_enhanced_page_css
+
+        css = get_enhanced_page_css()
+        assert isinstance(css, str)
+        assert ".empty-state" in css
+
+    def test_get_empty_state_types(self):
+        """Test get_empty_state for all types."""
+        from integradio.pages.utils import get_empty_state, EMPTY_STATES
+
+        for state_type in EMPTY_STATES.keys():
+            html = get_empty_state(state_type)
+            assert "empty-state" in html
+            assert "role=\"status\"" in html
+
+    def test_get_empty_state_invalid(self):
+        """Test get_empty_state with invalid type returns default."""
+        from integradio.pages.utils import get_empty_state
+
+        html = get_empty_state("nonexistent_type")
+        # Should return no_data as default
+        assert "No data available" in html
+
+    def test_add_skip_navigation(self):
+        """Test add_skip_navigation creates HTML component."""
+        from integradio.pages.utils import add_skip_navigation
+        import gradio as gr
+
+        with gr.Blocks() as demo:
+            component = add_skip_navigation()
+
+        assert component is not None
+
+    def test_add_main_content_landmark(self):
+        """Test add_main_content_landmark creates HTML."""
+        from integradio.pages.utils import add_main_content_landmark
+        import gradio as gr
+
+        with gr.Blocks() as demo:
+            component = add_main_content_landmark("my-content")
+
+        assert component is not None
+
+    def test_close_main_content_landmark(self):
+        """Test close_main_content_landmark creates closing div."""
+        from integradio.pages.utils import close_main_content_landmark
+        import gradio as gr
+
+        with gr.Blocks() as demo:
+            component = close_main_content_landmark()
+
+        assert component is not None
+
+    def test_create_loading_section_show_skeleton(self):
+        """Test create_loading_section with skeleton visible."""
+        from integradio.pages.utils import create_loading_section
+        import gradio as gr
+
+        with gr.Blocks() as demo:
+            skeleton, content = create_loading_section(
+                label="Results",
+                lines=5,
+                show_skeleton=True,
+            )
+
+        assert skeleton is not None
+        assert content is not None
+
+    def test_create_loading_section_hide_skeleton(self):
+        """Test create_loading_section with skeleton hidden."""
+        from integradio.pages.utils import create_loading_section
+        import gradio as gr
+
+        with gr.Blocks() as demo:
+            skeleton, content = create_loading_section(
+                label="Results",
+                show_skeleton=False,
+            )
+
+        assert skeleton is not None
+        assert content is not None
+
+    def test_create_status_announcement_polite(self):
+        """Test create_status_announcement with polite mode."""
+        from integradio.pages.utils import create_status_announcement
+        import gradio as gr
+
+        with gr.Blocks() as demo:
+            component = create_status_announcement(
+                message="Loading...",
+                politeness="polite",
+            )
+
+        assert component is not None
+
+    def test_create_status_announcement_assertive(self):
+        """Test create_status_announcement with assertive mode."""
+        from integradio.pages.utils import create_status_announcement
+        import gradio as gr
+
+        with gr.Blocks() as demo:
+            component = create_status_announcement(
+                message="Error!",
+                politeness="assertive",
+            )
+
+        assert component is not None
+
+    def test_create_status_announcement_empty(self):
+        """Test create_status_announcement with empty message."""
+        from integradio.pages.utils import create_status_announcement
+        import gradio as gr
+
+        with gr.Blocks() as demo:
+            component = create_status_announcement()
+
+        assert component is not None
+
+    def test_create_confirmation_button(self):
+        """Test create_confirmation_button creates all components."""
+        from integradio.pages.utils import create_confirmation_button
+        import gradio as gr
+
+        with gr.Blocks() as demo:
+            button, dialog, confirmed = create_confirmation_button(
+                label="Delete",
+                confirm_title="Confirm Delete",
+                confirm_message="Are you sure?",
+            )
+
+        assert button is not None
+        assert dialog is not None
+        assert confirmed is not None
+
+    def test_create_confirmation_button_with_icon(self):
+        """Test create_confirmation_button with icon."""
+        from integradio.pages.utils import create_confirmation_button
+        import gradio as gr
+
+        with gr.Blocks() as demo:
+            button, _, _ = create_confirmation_button(
+                label="Delete",
+                confirm_title="Confirm",
+                confirm_message="Sure?",
+                icon="🗑️",
+            )
+
+        assert button is not None
+
+    def test_create_confirmation_button_stop_variant(self):
+        """Test create_confirmation_button with stop variant (danger)."""
+        from integradio.pages.utils import create_confirmation_button
+        import gradio as gr
+
+        with gr.Blocks() as demo:
+            button, dialog, _ = create_confirmation_button(
+                label="Stop",
+                confirm_title="Stop Process",
+                confirm_message="Stop running?",
+                variant="stop",
+            )
+
+        assert button is not None

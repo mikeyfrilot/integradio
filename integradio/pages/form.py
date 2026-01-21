@@ -3,10 +3,16 @@ Form/Wizard Page - Multi-step forms with validation.
 
 Features:
 - Multi-step wizard flow
-- Progress indicator
-- Field validation
+- Progress indicator with ARIA support
+- Real-time inline validation (2026 best practices)
+- Password strength meter
 - Conditional fields
 - Review step before submit
+- WCAG 2.2 compliant
+
+References:
+- NN/g Form Design: https://www.nngroup.com/articles/web-form-design/
+- Smashing Magazine Inline Validation: https://www.smashingmagazine.com/2022/09/inline-validation-web-forms-ux/
 """
 
 from typing import Optional, Callable, Any
@@ -17,6 +23,14 @@ import gradio as gr
 
 from ..components import semantic
 from ..blocks import SemanticBlocks
+from ..ux import (
+    validate_required,
+    validate_email,
+    validate_min_length,
+    create_inline_error,
+    create_password_strength_meter,
+    get_all_ux_css,
+)
 
 
 class FieldType(Enum):
@@ -34,16 +48,23 @@ class FieldType(Enum):
 
 @dataclass
 class FormField:
-    """Definition of a form field."""
+    """
+    Definition of a form field.
+
+    Note: Per 2026 UX best practices, avoid using placeholder as the only
+    guidance. Always use help_text for field hints since placeholders
+    disappear when typing.
+    """
     name: str
     label: str
     type: FieldType = FieldType.TEXT
     required: bool = False
-    placeholder: str = ""
+    placeholder: str = ""  # Use sparingly - disappears on input
     choices: list[str] = field(default_factory=list)
     default: Any = None
     validation_regex: str = ""
-    help_text: str = ""
+    help_text: str = ""  # Preferred - stays visible during input
+    min_length: int = 0  # For password/text validation
 
 
 @dataclass
@@ -66,11 +87,14 @@ class FormConfig:
             description="Tell us about yourself",
             icon="👤",
             fields=[
-                FormField("first_name", "First Name", required=True, placeholder="John"),
-                FormField("last_name", "Last Name", required=True, placeholder="Doe"),
+                FormField("first_name", "First Name", required=True,
+                         help_text="Your given name"),
+                FormField("last_name", "Last Name", required=True,
+                         help_text="Your family name"),
                 FormField("email", "Email Address", FieldType.EMAIL, required=True,
-                         placeholder="john@example.com"),
-                FormField("phone", "Phone Number", placeholder="+1 (555) 000-0000"),
+                         help_text="We'll use this to send you updates"),
+                FormField("phone", "Phone Number",
+                         help_text="Optional - for account recovery"),
             ]
         ),
         FormStep(
@@ -78,9 +102,14 @@ class FormConfig:
             description="Create your account",
             icon="🔐",
             fields=[
-                FormField("username", "Username", required=True, placeholder="johndoe"),
-                FormField("password", "Password", FieldType.PASSWORD, required=True),
-                FormField("confirm_password", "Confirm Password", FieldType.PASSWORD, required=True),
+                FormField("username", "Username", required=True,
+                         help_text="Choose a unique username (letters, numbers, underscores)",
+                         min_length=3),
+                FormField("password", "Password", FieldType.PASSWORD, required=True,
+                         help_text="Min 8 chars with uppercase, lowercase, and number",
+                         min_length=8),
+                FormField("confirm_password", "Confirm Password", FieldType.PASSWORD, required=True,
+                         help_text="Re-enter your password to confirm"),
             ]
         ),
         FormStep(
@@ -89,16 +118,20 @@ class FormConfig:
             icon="⚙️",
             fields=[
                 FormField("plan", "Select Plan", FieldType.DROPDOWN,
-                         choices=["Free", "Pro", "Enterprise"], default="Free"),
-                FormField("newsletter", "Subscribe to newsletter", FieldType.CHECKBOX, default=True),
+                         choices=["Free", "Pro", "Enterprise"], default="Free",
+                         help_text="You can upgrade anytime"),
+                FormField("newsletter", "Subscribe to newsletter", FieldType.CHECKBOX, default=True,
+                         help_text="Weekly updates on new features"),
                 FormField("notifications", "Notification Preference", FieldType.RADIO,
-                         choices=["All", "Important Only", "None"], default="Important Only"),
+                         choices=["All", "Important Only", "None"], default="Important Only",
+                         help_text="Choose how often we contact you"),
             ]
         ),
     ])
     show_progress: bool = True
     allow_skip: bool = False
     submit_text: str = "Submit"
+    show_validation: bool = True  # Enable inline validation
 
 
 def create_form_wizard(
@@ -135,24 +168,37 @@ def create_form_wizard(
             tags=["header", "description"],
         )
 
-    # Progress Indicator
+    # Progress Indicator with ARIA support
     if config.show_progress:
         def make_progress_md(current_step: int) -> str:
             steps_display = []
             for i, step in enumerate(config.steps):
                 icon = step.icon or f"{i+1}"
                 if i < current_step:
+                    # Completed step
                     steps_display.append(f"✅ ~~{icon} {step.title}~~")
                 elif i == current_step:
+                    # Current step
                     steps_display.append(f"**🔵 {icon} {step.title}**")
                 else:
+                    # Pending step
                     steps_display.append(f"⚪ {icon} {step.title}")
             return " → ".join(steps_display)
 
+        def make_progress_aria(current_step: int) -> str:
+            return f"Step {current_step + 1} of {num_steps}: {config.steps[current_step].title}"
+
+        # Visual progress
         components["progress"] = semantic(
             gr.Markdown(make_progress_md(0)),
             intent="shows current progress through form steps",
             tags=["progress", "navigation"],
+        )
+
+        # Screen reader announcement (hidden visually)
+        components["progress_aria"] = gr.HTML(
+            f'<div class="sr-only" role="status" aria-live="polite">{make_progress_aria(0)}</div>',
+            visible=True,
         )
 
     gr.Markdown("---")
@@ -183,10 +229,14 @@ def create_form_wizard(
             # Step fields
             for field in step.fields:
                 field_key = f"field_{field.name}"
+                error_key = f"error_{field.name}"
 
-                # Help text
+                # Help text displayed ABOVE field (persistent, not placeholder)
                 if field.help_text:
-                    gr.Markdown(f"*{field.help_text}*")
+                    gr.Markdown(
+                        f'<small style="color: #6b7280;">{field.help_text}</small>',
+                        elem_id=f"help-{field.name}",
+                    )
 
                 # Create appropriate input
                 if field.type == FieldType.TEXT:
@@ -224,6 +274,24 @@ def create_form_wizard(
                         intent=f"collects {field.label} securely",
                         tags=["input", "password", "sensitive", f"step_{step_idx}"],
                     )
+
+                    # Add password strength meter for primary password fields (not confirm)
+                    if "confirm" not in field.name.lower():
+                        strength_key = f"strength_{field.name}"
+                        components[strength_key] = gr.HTML(
+                            create_password_strength_meter(""),
+                            elem_id=f"strength-{field.name}",
+                        )
+
+                        # Wire up strength meter update
+                        def update_strength(password):
+                            return create_password_strength_meter(password or "")
+
+                        components[field_key].change(
+                            fn=update_strength,
+                            inputs=[components[field_key]],
+                            outputs=[components[strength_key]],
+                        )
 
                 elif field.type == FieldType.NUMBER:
                     components[field_key] = semantic(

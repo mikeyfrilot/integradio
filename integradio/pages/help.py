@@ -92,13 +92,13 @@ def create_help_center(
         tags=["header", "subtitle"],
     )
 
-    # Search Bar (prominent)
+    # Search Bar (prominent) - accessible label retained for screen readers
     with gr.Row():
         with gr.Column(scale=5):
             components["search"] = semantic(
                 gr.Textbox(
                     placeholder="Search for help articles, FAQs, guides...",
-                    label="",
+                    label="Search help documentation",
                     elem_id="help-search",
                     show_label=False,
                     lines=1,
@@ -120,12 +120,12 @@ def create_help_center(
         tags=["results", "search"],
     )
 
-    # Quick Links / Categories
+    # Quick Links / Categories - default size for touch target compliance
     gr.Markdown("### 🏷️ Browse by Category")
     with gr.Row():
         for i, category in enumerate(config.categories):
             components[f"cat_{i}"] = semantic(
-                gr.Button(category, variant="secondary", size="sm"),
+                gr.Button(category, variant="secondary"),
                 intent=f"filters help content to {category} category",
                 tags=["filter", "category", "navigation"],
             )

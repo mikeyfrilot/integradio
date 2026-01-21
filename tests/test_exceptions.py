@@ -21,6 +21,20 @@ from integradio.exceptions import (
     ValidationError,
     CircuitBreakerError,
     CircuitOpenError,
+    FileUploadError,
+    FileValidationError,
+    FileSanitizationError,
+    FileSizeError,
+    BlockedExtensionError,
+    WebSocketError,
+    WebSocketConnectionError,
+    WebSocketAuthenticationError,
+    WebSocketTimeoutError,
+    WebSocketDisconnectedError,
+    EventSignatureError,
+    EventExpiredError,
+    RateLimitExceededError,
+    ReplayAttackError,
 )
 
 
@@ -297,4 +311,220 @@ class TestExceptionChaining:
         ]
         for error in errors:
             assert isinstance(error, ComponentError)
+            assert isinstance(error, IntegradioError)
+
+
+class TestFileUploadExceptions:
+    """Tests for file upload exceptions."""
+
+    def test_file_upload_error_hierarchy(self):
+        """Test FileUploadError inherits from base."""
+        error = FileUploadError("Upload failed")
+        assert isinstance(error, IntegradioError)
+        assert "Upload failed" in str(error)
+
+    def test_file_validation_error(self):
+        """Test FileValidationError with filename and reason."""
+        error = FileValidationError("test.exe", "Executable files not allowed")
+        assert "test.exe" in str(error)
+        assert "Executable files not allowed" in str(error)
+        assert error.details["filename"] == "test.exe"
+        assert error.details["reason"] == "Executable files not allowed"
+        assert error.filename == "test.exe"
+        assert error.reason == "Executable files not allowed"
+        assert isinstance(error, FileUploadError)
+
+    def test_file_sanitization_error(self):
+        """Test FileSanitizationError with original filename."""
+        error = FileSanitizationError("../../../etc/passwd", "Path traversal detected")
+        assert "../../../etc/passwd" in str(error)
+        assert "Path traversal detected" in str(error)
+        assert error.details["original_filename"] == "../../../etc/passwd"
+        assert error.details["reason"] == "Path traversal detected"
+        assert error.original_filename == "../../../etc/passwd"
+        assert isinstance(error, FileUploadError)
+
+    def test_file_size_error(self):
+        """Test FileSizeError with size calculations."""
+        # 15MB file, 10MB limit
+        size_bytes = 15 * 1024 * 1024
+        max_bytes = 10 * 1024 * 1024
+        error = FileSizeError("large_file.zip", size_bytes, max_bytes)
+
+        # Check message includes MB conversion
+        assert "large_file.zip" in str(error)
+        assert "15.0MB" in str(error)
+        assert "10.0MB" in str(error)
+
+        # Check details
+        assert error.details["filename"] == "large_file.zip"
+        assert error.details["size_bytes"] == size_bytes
+        assert error.details["max_bytes"] == max_bytes
+
+        # Check attributes
+        assert error.filename == "large_file.zip"
+        assert error.size_bytes == size_bytes
+        assert error.max_bytes == max_bytes
+        assert isinstance(error, FileUploadError)
+
+    def test_blocked_extension_error(self):
+        """Test BlockedExtensionError with extension."""
+        error = BlockedExtensionError("malware.exe", ".exe")
+        assert ".exe" in str(error)
+        assert "not allowed" in str(error)
+        assert error.details["filename"] == "malware.exe"
+        assert error.details["extension"] == ".exe"
+        assert error.filename == "malware.exe"
+        assert error.extension == ".exe"
+        assert isinstance(error, FileUploadError)
+
+    def test_file_upload_hierarchy(self):
+        """Test all file upload exceptions inherit correctly."""
+        errors = [
+            FileValidationError("f.txt", "invalid"),
+            FileSanitizationError("f.txt", "bad"),
+            FileSizeError("f.txt", 100, 50),
+            BlockedExtensionError("f.exe", ".exe"),
+        ]
+        for error in errors:
+            assert isinstance(error, FileUploadError)
+            assert isinstance(error, IntegradioError)
+
+
+class TestWebSocketExceptions:
+    """Tests for WebSocket and event exceptions."""
+
+    def test_websocket_error_hierarchy(self):
+        """Test WebSocketError inherits from base."""
+        error = WebSocketError("WebSocket failed")
+        assert isinstance(error, IntegradioError)
+        assert "WebSocket failed" in str(error)
+
+    def test_websocket_connection_error(self):
+        """Test WebSocketConnectionError with reason."""
+        error = WebSocketConnectionError("Connection refused")
+        assert "Connection refused" in str(error)
+        assert error.details["reason"] == "Connection refused"
+        assert error.client_ip is None
+        assert isinstance(error, WebSocketError)
+
+    def test_websocket_connection_error_with_client_ip(self):
+        """Test WebSocketConnectionError with client IP."""
+        error = WebSocketConnectionError("Timeout", client_ip="192.168.1.100")
+        assert "Timeout" in str(error)
+        assert error.details["client_ip"] == "192.168.1.100"
+        assert error.client_ip == "192.168.1.100"
+
+    def test_websocket_authentication_error(self):
+        """Test WebSocketAuthenticationError with reason."""
+        error = WebSocketAuthenticationError("Invalid token")
+        assert "Invalid token" in str(error)
+        assert "authentication" in str(error).lower()
+        assert error.details["reason"] == "Invalid token"
+        assert error.client_ip is None
+        assert isinstance(error, WebSocketError)
+
+    def test_websocket_authentication_error_with_client_ip(self):
+        """Test WebSocketAuthenticationError with client IP."""
+        error = WebSocketAuthenticationError("Expired token", client_ip="10.0.0.1")
+        assert error.details["client_ip"] == "10.0.0.1"
+        assert error.client_ip == "10.0.0.1"
+
+    def test_websocket_timeout_error(self):
+        """Test WebSocketTimeoutError with operation and duration."""
+        error = WebSocketTimeoutError("send", 30.0)
+        assert "send" in str(error)
+        assert "30" in str(error)
+        assert error.details["operation"] == "send"
+        assert error.details["timeout_seconds"] == 30.0
+        assert error.operation == "send"
+        assert error.timeout_seconds == 30.0
+        assert isinstance(error, WebSocketError)
+
+    def test_websocket_disconnected_error(self):
+        """Test WebSocketDisconnectedError with defaults."""
+        error = WebSocketDisconnectedError()
+        assert "Client disconnected" in str(error)
+        assert error.details["reason"] == "Client disconnected"
+        assert error.client_id is None
+        assert isinstance(error, WebSocketError)
+
+    def test_websocket_disconnected_error_with_client_id(self):
+        """Test WebSocketDisconnectedError with client ID and custom reason."""
+        error = WebSocketDisconnectedError(client_id="user-123", reason="Network error")
+        assert "Network error" in str(error)
+        assert error.details["client_id"] == "user-123"
+        assert error.details["reason"] == "Network error"
+        assert error.client_id == "user-123"
+
+    def test_event_signature_error(self):
+        """Test EventSignatureError with defaults."""
+        error = EventSignatureError()
+        assert "signature" in str(error).lower()
+        assert error.details["reason"] == "Invalid signature"
+        assert error.event_id is None
+        assert isinstance(error, WebSocketError)
+
+    def test_event_signature_error_with_event_id(self):
+        """Test EventSignatureError with event ID and custom reason."""
+        error = EventSignatureError(event_id="evt-456", reason="Tampered payload")
+        assert "Tampered payload" in str(error)
+        assert error.details["event_id"] == "evt-456"
+        assert error.details["reason"] == "Tampered payload"
+        assert error.event_id == "evt-456"
+
+    def test_event_expired_error(self):
+        """Test EventExpiredError with timing details."""
+        error = EventExpiredError("evt-789", age_seconds=120.5, max_age_seconds=60.0)
+        assert "evt-789" in str(error)
+        assert "expired" in str(error).lower()
+        assert "120.5" in str(error)
+        assert "60" in str(error)
+        assert error.details["event_id"] == "evt-789"
+        assert error.details["age_seconds"] == 120.5
+        assert error.details["max_age_seconds"] == 60.0
+        assert error.event_id == "evt-789"
+        assert isinstance(error, WebSocketError)
+
+    def test_rate_limit_exceeded_error(self):
+        """Test RateLimitExceededError with limit info."""
+        error = RateLimitExceededError("client-abc", limit=100, window_seconds=60.0)
+        assert "client-abc" in str(error)
+        assert "100" in str(error)
+        assert "60" in str(error)
+        assert error.details["client_id"] == "client-abc"
+        assert error.details["limit"] == 100
+        assert error.details["window_seconds"] == 60.0
+        assert error.client_id == "client-abc"
+        assert isinstance(error, WebSocketError)
+
+    def test_replay_attack_error(self):
+        """Test ReplayAttackError with nonce."""
+        error = ReplayAttackError("nonce-12345")
+        assert "nonce-12345" in str(error)
+        assert "replay" in str(error).lower()
+        assert error.details["nonce"] == "nonce-12345"
+        assert error.nonce == "nonce-12345"
+        assert isinstance(error, WebSocketError)
+
+    def test_replay_attack_error_with_client_id(self):
+        """Test ReplayAttackError with client ID."""
+        error = ReplayAttackError("nonce-xyz", client_id="attacker-ip")
+        assert error.details["client_id"] == "attacker-ip"
+        assert error.nonce == "nonce-xyz"
+
+    def test_websocket_hierarchy(self):
+        """Test all WebSocket exceptions inherit correctly."""
+        errors = [
+            WebSocketConnectionError("reason"),
+            WebSocketAuthenticationError("reason"),
+            WebSocketTimeoutError("op", 10.0),
+            WebSocketDisconnectedError(),
+            EventSignatureError(),
+            EventExpiredError("id", 100.0, 60.0),
+            RateLimitExceededError("client", 100, 60.0),
+            ReplayAttackError("nonce"),
+        ]
+        for error in errors:
+            assert isinstance(error, WebSocketError)
             assert isinstance(error, IntegradioError)

@@ -215,3 +215,177 @@ class CircuitOpenError(CircuitBreakerError):
         )
         self.service_name = service_name
         self.retry_after_seconds = retry_after_seconds
+
+
+# =============================================================================
+# File Upload Exceptions
+# =============================================================================
+
+
+class FileUploadError(IntegradioError):
+    """Base exception for file upload errors."""
+    pass
+
+
+class FileValidationError(FileUploadError):
+    """Raised when uploaded file fails validation."""
+
+    def __init__(self, filename: str, reason: str):
+        super().__init__(
+            f"File validation failed for '{filename}': {reason}",
+            details={"filename": filename, "reason": reason},
+        )
+        self.filename = filename
+        self.reason = reason
+
+
+class FileSanitizationError(FileUploadError):
+    """Raised when filename sanitization fails."""
+
+    def __init__(self, original_filename: str, reason: str):
+        super().__init__(
+            f"Cannot sanitize filename '{original_filename}': {reason}",
+            details={"original_filename": original_filename, "reason": reason},
+        )
+        self.original_filename = original_filename
+
+
+class FileSizeError(FileUploadError):
+    """Raised when file exceeds size limits."""
+
+    def __init__(self, filename: str, size_bytes: int, max_bytes: int):
+        size_mb = size_bytes / (1024 * 1024)
+        max_mb = max_bytes / (1024 * 1024)
+        super().__init__(
+            f"File '{filename}' ({size_mb:.1f}MB) exceeds maximum size ({max_mb:.1f}MB)",
+            details={
+                "filename": filename,
+                "size_bytes": size_bytes,
+                "max_bytes": max_bytes,
+            },
+        )
+        self.filename = filename
+        self.size_bytes = size_bytes
+        self.max_bytes = max_bytes
+
+
+class BlockedExtensionError(FileUploadError):
+    """Raised when file has a blocked extension."""
+
+    def __init__(self, filename: str, extension: str):
+        super().__init__(
+            f"File type '{extension}' is not allowed for security reasons",
+            details={"filename": filename, "extension": extension},
+        )
+        self.filename = filename
+        self.extension = extension
+
+
+# =============================================================================
+# WebSocket/Event Exceptions
+# =============================================================================
+
+
+class WebSocketError(IntegradioError):
+    """Base exception for WebSocket-related errors."""
+    pass
+
+
+class WebSocketConnectionError(WebSocketError):
+    """Raised when WebSocket connection fails."""
+
+    def __init__(self, reason: str, client_ip: str | None = None):
+        details = {"reason": reason}
+        if client_ip:
+            details["client_ip"] = client_ip
+        super().__init__(f"WebSocket connection failed: {reason}", details=details)
+        self.client_ip = client_ip
+
+
+class WebSocketAuthenticationError(WebSocketError):
+    """Raised when WebSocket authentication fails."""
+
+    def __init__(self, reason: str, client_ip: str | None = None):
+        details = {"reason": reason}
+        if client_ip:
+            details["client_ip"] = client_ip
+        super().__init__(f"WebSocket authentication failed: {reason}", details=details)
+        self.client_ip = client_ip
+
+
+class WebSocketTimeoutError(WebSocketError):
+    """Raised when WebSocket operation times out."""
+
+    def __init__(self, operation: str, timeout_seconds: float):
+        super().__init__(
+            f"WebSocket {operation} timed out after {timeout_seconds}s",
+            details={"operation": operation, "timeout_seconds": timeout_seconds},
+        )
+        self.operation = operation
+        self.timeout_seconds = timeout_seconds
+
+
+class WebSocketDisconnectedError(WebSocketError):
+    """Raised when client disconnects unexpectedly."""
+
+    def __init__(self, client_id: str | None = None, reason: str = "Client disconnected"):
+        details = {"reason": reason}
+        if client_id:
+            details["client_id"] = client_id
+        super().__init__(reason, details=details)
+        self.client_id = client_id
+
+
+class EventSignatureError(WebSocketError):
+    """Raised when event signature verification fails."""
+
+    def __init__(self, event_id: str | None = None, reason: str = "Invalid signature"):
+        details = {"reason": reason}
+        if event_id:
+            details["event_id"] = event_id
+        super().__init__(f"Event signature verification failed: {reason}", details=details)
+        self.event_id = event_id
+
+
+class EventExpiredError(WebSocketError):
+    """Raised when event has expired."""
+
+    def __init__(self, event_id: str, age_seconds: float, max_age_seconds: float):
+        super().__init__(
+            f"Event '{event_id}' has expired (age: {age_seconds:.1f}s, max: {max_age_seconds}s)",
+            details={
+                "event_id": event_id,
+                "age_seconds": age_seconds,
+                "max_age_seconds": max_age_seconds,
+            },
+        )
+        self.event_id = event_id
+
+
+class RateLimitExceededError(WebSocketError):
+    """Raised when rate limit is exceeded."""
+
+    def __init__(self, client_id: str, limit: int, window_seconds: float):
+        super().__init__(
+            f"Rate limit exceeded for client '{client_id}' ({limit} requests per {window_seconds}s)",
+            details={
+                "client_id": client_id,
+                "limit": limit,
+                "window_seconds": window_seconds,
+            },
+        )
+        self.client_id = client_id
+
+
+class ReplayAttackError(WebSocketError):
+    """Raised when replay attack is detected (duplicate nonce)."""
+
+    def __init__(self, nonce: str, client_id: str | None = None):
+        details = {"nonce": nonce}
+        if client_id:
+            details["client_id"] = client_id
+        super().__init__(
+            f"Replay attack detected: nonce '{nonce}' already used",
+            details=details,
+        )
+        self.nonce = nonce

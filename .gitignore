@@ -86,7 +86,13 @@ dmypy.json
 # OS files
 .DS_Store
 Thumbs.db
+nul
+
+# Lock files (managed by uv/pip)
+uv.lock
+poetry.lock
 
 # Local development
 *.local
 .env.local
+monitor.ps1

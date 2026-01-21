@@ -9,6 +9,7 @@ import hashlib
 import json
 import logging
 import httpx
+import threading
 import warnings
 from pathlib import Path
 from typing import Optional
@@ -32,6 +33,10 @@ logger = logging.getLogger(__name__)
 # This ensures stale embeddings are not served after changes (2026 best practice)
 # See: https://sparkco.ai/blog/mastering-embedding-versioning-best-practices-future-trends
 CACHE_VERSION = "v1"
+
+# Edge case limits (2026 defensive programming best practices)
+MAX_TEXT_LENGTH = 100_000  # Maximum text length before truncation
+MAX_BATCH_SIZE = 1000  # Maximum batch size before warning
 
 
 class EmbedderUnavailableWarning(UserWarning):
@@ -67,6 +72,7 @@ class Embedder:
         self.prefix = prefix
         self.cache_dir = cache_dir
         self._cache: dict[str, np.ndarray] = {}
+        self._cache_lock = threading.Lock()  # Thread-safe cache access (2026 edge case fix)
         self._available: Optional[bool] = None  # Lazy check
         self._warned: bool = False
 
@@ -88,6 +94,9 @@ class Embedder:
             self._circuit_breaker = None
 
         if cache_dir:
+            # Validate cache directory (edge case: path exists but is a file)
+            if cache_dir.exists() and not cache_dir.is_dir():
+                raise ValueError(f"Cache path {cache_dir} exists but is not a directory")
             cache_dir.mkdir(parents=True, exist_ok=True)
             self._load_cache()
 
@@ -139,7 +148,20 @@ class Embedder:
             try:
                 with open(cache_file, "r") as f:
                     data = json.load(f)
-                    self._cache = {k: np.array(v) for k, v in data.items()}
+                    # Validate and load each entry (edge case: corrupted array values)
+                    loaded_cache = {}
+                    for k, v in data.items():
+                        try:
+                            arr = np.array(v, dtype=np.float32)
+                            # Validate dimension matches expected
+                            if arr.shape == (self.dimension,):
+                                loaded_cache[k] = arr
+                            else:
+                                logger.warning(f"Skipping cache entry {k[:8]}...: wrong dimension {arr.shape}")
+                        except (ValueError, TypeError) as e:
+                            logger.warning(f"Skipping corrupted cache entry {k[:8]}...: {e}")
+                    with self._cache_lock:
+                        self._cache = loaded_cache
             except (json.JSONDecodeError, OSError, ValueError) as e:
                 # Cache file corrupted or unreadable - start fresh
                 warnings.warn(
@@ -147,15 +169,19 @@ class Embedder:
                     UserWarning,
                     stacklevel=2,
                 )
-                self._cache = {}
+                with self._cache_lock:
+                    self._cache = {}
 
     def _save_cache(self) -> None:
-        """Save embedding cache to disk."""
+        """Save embedding cache to disk (thread-safe)."""
         if not self.cache_dir:
             return
         cache_file = self.cache_dir / "embeddings.json"
         try:
-            data = {k: v.tolist() for k, v in self._cache.items()}
+            # Take a snapshot of cache under lock (edge case: concurrent modification)
+            with self._cache_lock:
+                cache_snapshot = dict(self._cache)
+            data = {k: v.tolist() for k, v in cache_snapshot.items()}
             with open(cache_file, "w") as f:
                 json.dump(data, f)
         except (OSError, TypeError) as e:
@@ -171,16 +197,46 @@ class Embedder:
         return np.zeros(self.dimension, dtype=np.float32)
 
     def _make_embed_request(self, prompt: str) -> np.ndarray:
-        """Make the actual embedding API request."""
-        response = httpx.post(
-            f"{self.base_url}/api/embeddings",
-            json={"model": self.model, "prompt": prompt},
-            timeout=30.0,
-        )
-        response.raise_for_status()
-        response_data = response.json()
+        """Make the actual embedding API request.
+
+        Raises:
+            EmbedderUnavailableError: If connection to Ollama fails
+            EmbedderTimeoutError: If request times out
+            EmbedderResponseError: If API returns invalid response
+        """
+        try:
+            response = httpx.post(
+                f"{self.base_url}/api/embeddings",
+                json={"model": self.model, "prompt": prompt},
+                timeout=30.0,
+            )
+            response.raise_for_status()
+        except httpx.ConnectError as e:
+            raise EmbedderUnavailableError(
+                self.base_url, cause=f"Connection refused: {e}"
+            ) from e
+        except httpx.TimeoutException as e:
+            raise EmbedderTimeoutError(
+                timeout_seconds=30.0, text_preview=prompt
+            ) from e
+        except httpx.HTTPStatusError as e:
+            raise EmbedderResponseError(
+                f"API returned error: {e.response.status_code}",
+                status_code=e.response.status_code,
+            ) from e
+
+        try:
+            response_data = response.json()
+        except json.JSONDecodeError as e:
+            raise EmbedderResponseError(
+                f"Invalid JSON response from API: {e}"
+            ) from e
+
         if "embedding" not in response_data:
-            raise KeyError("API response missing 'embedding' field")
+            raise EmbedderResponseError(
+                "API response missing 'embedding' field",
+                status_code=response.status_code,
+            )
         return np.array(response_data["embedding"], dtype=np.float32)
 
     def embed(self, text: str) -> np.ndarray:
@@ -193,10 +249,21 @@ class Embedder:
         Returns:
             Embedding vector as numpy array (zeros if Ollama unavailable)
         """
+        # Input validation (2026 edge case best practices)
+        if not text or not isinstance(text, str):
+            logger.debug("Empty or invalid text input, returning zero vector")
+            return self._zero_vector()
+
+        # Truncate extremely long text (edge case: memory exhaustion)
+        if len(text) > MAX_TEXT_LENGTH:
+            logger.warning(f"Text too long ({len(text)} chars), truncating to {MAX_TEXT_LENGTH}")
+            text = text[:MAX_TEXT_LENGTH]
+
         key = self._cache_key(text)
-        if key in self._cache:
-            logger.debug(f"Cache hit for embedding: key={key[:8]}...")
-            return self._cache[key]
+        with self._cache_lock:
+            if key in self._cache:
+                logger.debug(f"Cache hit for embedding: key={key[:8]}...")
+                return self._cache[key].copy()  # Return copy to prevent mutation
 
         # Check availability first
         if not self.available:
@@ -209,8 +276,9 @@ class Embedder:
                 embedding = self._circuit_breaker.call(
                     lambda: self._make_embed_request(f"{self.prefix}{text}")
                 )
-                # Cache result on success
-                self._cache[key] = embedding
+                # Cache result on success (thread-safe)
+                with self._cache_lock:
+                    self._cache[key] = embedding
                 if self.cache_dir:
                     self._save_cache()
                 logger.debug(f"Embedding generated via circuit breaker: key={key[:8]}...")
@@ -223,14 +291,15 @@ class Embedder:
         try:
             embedding = self._make_embed_request(f"{self.prefix}{text}")
 
-            # Cache result
-            self._cache[key] = embedding
+            # Cache result (thread-safe)
+            with self._cache_lock:
+                self._cache[key] = embedding
             if self.cache_dir:
                 self._save_cache()
 
             logger.debug(f"Embedding generated: key={key[:8]}...")
             return embedding
-        except (httpx.ConnectError, httpx.TimeoutException, httpx.HTTPStatusError, KeyError) as e:
+        except (EmbedderUnavailableError, EmbedderTimeoutError, EmbedderResponseError) as e:
             # Mark as unavailable and return zero vector
             self._available = False
             if not self._warned:
@@ -253,27 +322,50 @@ class Embedder:
         Returns:
             List of embedding vectors
         """
-        results = []
+        # Input validation (2026 edge case best practices)
+        if not texts or not isinstance(texts, list):
+            return []
+
+        # Filter out invalid entries (edge case: None or non-string elements)
+        valid_texts = []
+        original_indices = []
+        for i, text in enumerate(texts):
+            if text and isinstance(text, str):
+                valid_texts.append(text)
+                original_indices.append(i)
+
+        if not valid_texts:
+            return [self._zero_vector() for _ in range(len(texts))]
+
+        # Warn if batch size is very large (edge case: memory pressure)
+        if len(valid_texts) > MAX_BATCH_SIZE:
+            logger.warning(f"Large batch size {len(valid_texts)} exceeds recommended {MAX_BATCH_SIZE}")
+
+        results = [None] * len(texts)  # Pre-allocate result list
         uncached_indices = []
         uncached_texts = []
 
-        # Check cache first
-        for i, text in enumerate(texts):
-            key = self._cache_key(text)
-            if key in self._cache:
-                results.append((i, self._cache[key]))
-            else:
-                uncached_indices.append(i)
-                uncached_texts.append(text)
+        # Check cache first (thread-safe)
+        with self._cache_lock:
+            for orig_idx, text in zip(original_indices, valid_texts):
+                key = self._cache_key(text)
+                if key in self._cache:
+                    results[orig_idx] = self._cache[key].copy()
+                else:
+                    uncached_indices.append(orig_idx)
+                    uncached_texts.append(text)
 
         # Embed uncached texts
-        for idx, text in zip(uncached_indices, uncached_texts):
+        for orig_idx, text in zip(uncached_indices, uncached_texts):
             embedding = self.embed(text)
-            results.append((idx, embedding))
+            results[orig_idx] = embedding
 
-        # Sort by original index
-        results.sort(key=lambda x: x[0])
-        return [r[1] for r in results]
+        # Fill any remaining None entries with zero vectors (invalid inputs)
+        for i in range(len(results)):
+            if results[i] is None:
+                results[i] = self._zero_vector()
+
+        return results
 
     def embed_query(self, query: str) -> np.ndarray:
         """
@@ -307,7 +399,7 @@ class Embedder:
             embedding = self._make_embed_request(f"search_query: {query}")
             logger.debug("Query embedding generated")
             return embedding
-        except (httpx.ConnectError, httpx.TimeoutException, httpx.HTTPStatusError, KeyError) as e:
+        except (EmbedderUnavailableError, EmbedderTimeoutError, EmbedderResponseError) as e:
             self._available = False
             if not self._warned:
                 warnings.warn(

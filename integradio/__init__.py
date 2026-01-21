@@ -134,6 +134,34 @@ def __getattr__(name: str):
 
 
 __version__ = "0.3.0"
+
+# Security: Check Gradio version at import time (non-blocking warning)
+def _check_gradio_security():
+    """Warn if Gradio version has known vulnerabilities."""
+    try:
+        import gradio as gr
+        from packaging import version as pkg_version
+
+        current = pkg_version.parse(gr.__version__)
+        min_secure = pkg_version.parse("5.0.0")
+
+        if current < min_secure:
+            import warnings
+            warnings.warn(
+                f"Gradio {gr.__version__} has known security vulnerabilities "
+                f"(CVE-2024-1561, CVE-2024-8021, CVE-2023-51449). "
+                f"Please upgrade to 5.0.0 or later: pip install --upgrade gradio",
+                UserWarning,
+                stacklevel=2,
+            )
+    except ImportError:
+        pass  # Gradio or packaging not installed yet
+    except Exception:
+        pass  # Don't crash on version check failures
+
+
+_check_gradio_security()
+
 __all__ = [
     # Core
     "SemanticBlocks",

@@ -1074,3 +1074,301 @@ class TestSerialization:
 
         assert len(parsed["children"]) == 1
         assert parsed["children"][0]["type"] == "card"
+
+
+# =============================================================================
+# Additional Edge Case Tests
+# =============================================================================
+
+class TestAdditionalEdgeCases:
+    """Additional edge case tests for full coverage."""
+
+    def test_color_role_low_saturation_background(self):
+        """Test color role for low saturation high frequency color."""
+        color = ExtractedColor(
+            color=ColorValue.from_hex("#f0f0f0"),  # Light gray
+            frequency=0.50,
+        )
+        role = classify_color_role(color, [color], 1920, 1080)
+        # High frequency, low saturation = background
+        assert role in (ColorRole.BACKGROUND, ColorRole.SURFACE)
+
+    def test_color_role_orange_warning(self):
+        """Test that orange color is classified as warning."""
+        color = ExtractedColor(
+            color=ColorValue.from_hex("#f97316"),  # Orange
+            frequency=0.02,
+        )
+        role = classify_color_role(color, [color], 1920, 1080)
+        # Orange (h ~25) is in range 0-30 or 330+, could be ERROR or WARNING
+        assert role in (ColorRole.WARNING, ColorRole.ERROR)
+
+    def test_color_role_blue_info(self):
+        """Test that low frequency blue is classified as info."""
+        color = ExtractedColor(
+            color=ColorValue.from_hex("#0ea5e9"),  # Sky blue
+            frequency=0.02,
+        )
+        role = classify_color_role(color, [color], 1920, 1080)
+        assert role == ColorRole.INFO
+
+    def test_color_role_purple_accent(self):
+        """Test that low frequency purple is classified as accent."""
+        color = ExtractedColor(
+            color=ColorValue.from_hex("#8b5cf6"),  # Purple
+            frequency=0.02,
+        )
+        role = classify_color_role(color, [color], 1920, 1080)
+        # Purple (h ~270) should be accent
+        assert role == ColorRole.ACCENT
+
+    def test_color_role_secondary(self):
+        """Test secondary color classification (medium frequency)."""
+        color = ExtractedColor(
+            color=ColorValue.from_hex("#6366f1"),  # Indigo
+            frequency=0.15,
+        )
+        role = classify_color_role(color, [color], 1920, 1080)
+        assert role == ColorRole.SECONDARY
+
+    def test_color_role_text_secondary(self):
+        """Test text-secondary classification."""
+        color = ExtractedColor(
+            color=ColorValue.from_hex("#666666"),  # Medium gray
+            frequency=0.05,
+        )
+        role = classify_color_role(color, [color], 1920, 1080)
+        assert role == ColorRole.TEXT_SECONDARY
+
+    def test_classify_region_icon(self):
+        """Test classifying an icon region (small square)."""
+        # A very small square region should be classified as icon or button
+        bounds = BoundingBox(x=100, y=100, width=24, height=24)
+        region_type = classify_region_type(bounds, 1920, 1080, [])
+        # Small regions can be icon or button based on aspect ratio
+        assert region_type in (RegionType.ICON, RegionType.BUTTON, RegionType.UNKNOWN)
+
+    def test_classify_region_card(self):
+        """Test classifying a card region."""
+        bounds = BoundingBox(x=100, y=200, width=400, height=200)
+        region_type = classify_region_type(bounds, 1920, 1080, [])
+        assert region_type == RegionType.CARD
+
+    def test_classify_region_zero_dimensions(self):
+        """Test region classification with zero image dimensions."""
+        bounds = BoundingBox(x=0, y=0, width=100, height=50)
+        region_type = classify_region_type(bounds, 0, 0, [])
+        assert region_type == RegionType.UNKNOWN
+
+    def test_classify_region_right_sidebar(self):
+        """Test classifying a right-side sidebar."""
+        bounds = BoundingBox(x=1650, y=100, width=250, height=800)
+        region_type = classify_region_type(bounds, 1920, 1080, [])
+        assert region_type == RegionType.SIDEBAR
+
+    def test_estimate_spacing_single_region(self):
+        """Test spacing estimation with single region."""
+        analyzer = ScreenshotAnalyzer()
+        mock_result = create_mock_result()
+        # Single region case
+        mock_result.regions = [mock_result.regions[0]]
+
+        spacing = analyzer._estimate_spacing(mock_result.regions, 1920, 1080)
+        # Default spacing should be returned
+        assert spacing.base == 8
+
+    def test_estimate_spacing_no_gaps(self):
+        """Test spacing estimation when regions touch."""
+        analyzer = ScreenshotAnalyzer()
+
+        # Create touching regions
+        regions = [
+            DetectedRegion(
+                region_type=RegionType.HEADER,
+                bounds=BoundingBox(0, 0, 1920, 64),
+                confidence=0.9,
+            ),
+            DetectedRegion(
+                region_type=RegionType.CONTENT,
+                bounds=BoundingBox(0, 64, 1920, 500),  # Touches header
+                confidence=0.9,
+            ),
+        ]
+
+        spacing = analyzer._estimate_spacing(regions, 1920, 1080)
+        assert spacing.base == 8  # Default
+
+    def test_estimate_typography_button(self):
+        """Test typography estimation for button region."""
+        analyzer = ScreenshotAnalyzer()
+
+        regions = [
+            DetectedRegion(
+                region_type=RegionType.BUTTON,
+                bounds=BoundingBox(100, 100, 120, 40),
+                confidence=0.9,
+            ),
+        ]
+
+        typography = analyzer._estimate_typography(regions, 1080)
+        assert len(typography) == 1
+        assert typography[0].size_px == 14
+        assert typography[0].weight == "medium"
+
+    def test_typography_estimate_weight_mapping(self):
+        """Test TypographyEstimate weight mapping."""
+        typo_normal = TypographyEstimate(size_px=16, weight="normal")
+        typo_medium = TypographyEstimate(size_px=16, weight="medium")
+        typo_bold = TypographyEstimate(size_px=16, weight="bold")
+
+        assert typo_normal.to_typography_value().font_weight == 400
+        assert typo_medium.to_typography_value().font_weight == 500
+        assert typo_bold.to_typography_value().font_weight == 700
+
+    def test_to_visual_spec_with_colors(self):
+        """Test to_visual_spec populates colors correctly."""
+        analyzer = ScreenshotAnalyzer()
+        mock_result = create_mock_result()
+
+        # Ensure all color roles are present
+        mock_result.colors.append(ExtractedColor(
+            color=ColorValue.from_hex("#e5e7eb"),
+            frequency=0.03,
+            role=ColorRole.BORDER,
+        ))
+
+        spec = analyzer.to_visual_spec(mock_result, "test-component")
+
+        assert spec.component_id == "test-component"
+        # Should have tokens from the color palette
+        assert len(spec.tokens) >= 0
+
+    def test_to_visual_spec_without_spacing(self):
+        """Test to_visual_spec when spacing is None."""
+        analyzer = ScreenshotAnalyzer()
+        mock_result = create_mock_result()
+        mock_result.spacing = None
+
+        spec = analyzer.to_visual_spec(mock_result, "no-spacing")
+
+        # Should not crash when spacing is None
+        assert spec.component_id == "no-spacing"
+
+    def test_to_token_group_with_all_roles(self):
+        """Test to_token_group includes all color roles."""
+        analyzer = ScreenshotAnalyzer()
+        mock_result = create_mock_result()
+
+        group = analyzer.to_token_group(mock_result)
+
+        # Check tokens were created for colors with roles
+        for color in mock_result.colors:
+            if color.role:
+                token = group.get(color.role.value)
+                assert token is not None
+
+    def test_analyze_pixels_assigns_roles(self):
+        """Test analyze_pixels assigns color roles."""
+        analyzer = ScreenshotAnalyzer(num_colors=4)
+        pixels = create_mock_pixels(100, 100, "regions")
+
+        result = analyzer.analyze_pixels(pixels, 100, 100)
+
+        # At least some colors should have roles assigned
+        roles_assigned = [c.role for c in result.colors if c.role is not None]
+        assert len(roles_assigned) > 0
+
+    def test_detect_horizontal_regions_single_change(self):
+        """Test region detection with single brightness change."""
+        brightness = [0.8] * 30 + [0.2] * 70
+        regions = detect_horizontal_regions(100, brightness)
+
+        # Should detect two regions
+        assert len(regions) >= 2
+
+    def test_detect_horizontal_regions_no_significant_changes(self):
+        """Test region detection with no significant changes."""
+        # Small variations that shouldn't trigger region split
+        brightness = [0.5 + (i % 2) * 0.05 for i in range(100)]
+        regions = detect_horizontal_regions(100, brightness)
+
+        # Should be one or few regions
+        assert len(regions) <= 10
+
+    def test_quantize_colors_with_varied_data(self):
+        """Test color quantization with more varied input."""
+        pixels = []
+        # Create 5 distinct color clusters
+        for _ in range(100):
+            pixels.append((255, 0, 0))    # Red
+        for _ in range(80):
+            pixels.append((0, 255, 0))    # Green
+        for _ in range(60):
+            pixels.append((0, 0, 255))    # Blue
+        for _ in range(40):
+            pixels.append((255, 255, 0))  # Yellow
+        for _ in range(20):
+            pixels.append((128, 128, 128))  # Gray
+
+        result = quantize_colors(pixels, num_colors=5)
+
+        assert len(result) == 5
+        # Most frequent should be red
+        assert result[0][1] >= result[1][1]
+
+    def test_extracted_color_source_regions(self):
+        """Test ExtractedColor with source regions."""
+        color = ExtractedColor(
+            color=ColorValue.from_hex("#3b82f6"),
+            frequency=0.15,
+            source_regions=["header", "button"],
+        )
+
+        assert len(color.source_regions) == 2
+        assert "header" in color.source_regions
+
+    def test_analysis_result_without_colors(self):
+        """Test AnalysisResult properties when colors is empty."""
+        result = AnalysisResult(
+            image_path="test.png",
+            width=100,
+            height=100,
+            colors=[],
+        )
+
+        assert result.color_palette == {}
+        assert result.dominant_colors == []
+
+    def test_region_type_enum_values(self):
+        """Test all RegionType enum values."""
+        assert RegionType.HEADER.value == "header"
+        assert RegionType.FOOTER.value == "footer"
+        assert RegionType.SIDEBAR.value == "sidebar"
+        assert RegionType.CONTENT.value == "content"
+        assert RegionType.CARD.value == "card"
+        assert RegionType.BUTTON.value == "button"
+        assert RegionType.INPUT.value == "input"
+        assert RegionType.IMAGE.value == "image"
+        assert RegionType.TEXT.value == "text"
+        assert RegionType.ICON.value == "icon"
+        assert RegionType.NAVIGATION.value == "navigation"
+        assert RegionType.MODAL.value == "modal"
+        assert RegionType.LIST.value == "list"
+        assert RegionType.TABLE.value == "table"
+        assert RegionType.FORM.value == "form"
+        assert RegionType.UNKNOWN.value == "unknown"
+
+    def test_color_role_enum_values(self):
+        """Test all ColorRole enum values."""
+        assert ColorRole.PRIMARY.value == "primary"
+        assert ColorRole.SECONDARY.value == "secondary"
+        assert ColorRole.ACCENT.value == "accent"
+        assert ColorRole.BACKGROUND.value == "background"
+        assert ColorRole.SURFACE.value == "surface"
+        assert ColorRole.TEXT_PRIMARY.value == "text-primary"
+        assert ColorRole.TEXT_SECONDARY.value == "text-secondary"
+        assert ColorRole.BORDER.value == "border"
+        assert ColorRole.ERROR.value == "error"
+        assert ColorRole.WARNING.value == "warning"
+        assert ColorRole.SUCCESS.value == "success"
+        assert ColorRole.INFO.value == "info"

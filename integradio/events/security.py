@@ -36,23 +36,40 @@ class EventSigner:
     - Timestamp included in signature
     """
 
-    def __init__(self, secret_key: str | bytes):
+    # Security: Minimum key length required (256 bits)
+    MIN_KEY_LENGTH = 32
+
+    def __init__(self, secret_key: str | bytes, *, allow_weak_key: bool = False):
         """
         Initialize signer with secret key.
 
         Args:
-            secret_key: Secret key for HMAC (min 32 bytes recommended)
+            secret_key: Secret key for HMAC (minimum 32 bytes required)
+            allow_weak_key: If True, allow keys shorter than 32 bytes (NOT recommended,
+                           only for testing/development). Default False.
+
+        Raises:
+            ValueError: If secret key is too short and allow_weak_key is False
         """
         if isinstance(secret_key, str):
             secret_key = secret_key.encode("utf-8")
 
-        if len(secret_key) < 32:
-            import warnings
-            warnings.warn(
-                "Secret key should be at least 32 bytes for security",
-                UserWarning,
-                stacklevel=2,
-            )
+        if len(secret_key) < self.MIN_KEY_LENGTH:
+            if allow_weak_key:
+                import warnings
+                warnings.warn(
+                    f"Secret key is only {len(secret_key)} bytes. "
+                    f"Production keys should be at least {self.MIN_KEY_LENGTH} bytes. "
+                    "This is insecure and should only be used for testing.",
+                    UserWarning,
+                    stacklevel=2,
+                )
+            else:
+                raise ValueError(
+                    f"Secret key must be at least {self.MIN_KEY_LENGTH} bytes for security. "
+                    f"Got {len(secret_key)} bytes. Use EventSigner.generate_key() to create a secure key, "
+                    "or pass allow_weak_key=True for testing only."
+                )
 
         self._key = secret_key
 
@@ -310,6 +327,23 @@ class ConnectionInfo:
     subscriptions: Set[str] = field(default_factory=set)
     message_count: int = 0
     last_activity: float = field(default_factory=time.time)
+    # Lock for thread-safe subscription modifications (2026 edge case fix)
+    _subscriptions_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+
+    async def add_subscriptions(self, patterns: list[str]) -> None:
+        """Thread-safe subscription addition."""
+        async with self._subscriptions_lock:
+            self.subscriptions.update(patterns)
+
+    async def remove_subscriptions(self, patterns: list[str]) -> None:
+        """Thread-safe subscription removal."""
+        async with self._subscriptions_lock:
+            self.subscriptions.difference_update(patterns)
+
+    async def get_subscriptions_snapshot(self) -> frozenset[str]:
+        """Get a thread-safe snapshot of current subscriptions."""
+        async with self._subscriptions_lock:
+            return frozenset(self.subscriptions)
 
 
 class ConnectionManager:
@@ -467,7 +501,8 @@ def validate_origin(
     try:
         parsed = urlparse(origin)
         origin_host = f"{parsed.scheme}://{parsed.netloc}"
-    except Exception:
+    except (ValueError, AttributeError):
+        # Invalid URL format
         return False
 
     for allowed in allowed_origins:
@@ -502,3 +537,198 @@ def validate_message_size(data: bytes | str, max_size: int = 65536) -> bool:
     if isinstance(data, str):
         data = data.encode("utf-8")
     return len(data) <= max_size
+
+
+# =============================================================================
+# Security Headers Middleware (2026 Best Practices)
+# =============================================================================
+
+# Default security headers based on OWASP recommendations
+DEFAULT_SECURITY_HEADERS = {
+    # Prevent MIME type sniffing
+    "X-Content-Type-Options": "nosniff",
+    # Prevent clickjacking
+    "X-Frame-Options": "DENY",
+    # Enable XSS filtering (legacy, but still useful)
+    "X-XSS-Protection": "1; mode=block",
+    # Referrer policy - don't leak URLs
+    "Referrer-Policy": "strict-origin-when-cross-origin",
+    # Permissions policy - disable unnecessary features
+    "Permissions-Policy": "geolocation=(), microphone=(), camera=()",
+    # Cache control for sensitive data
+    "Cache-Control": "no-store, max-age=0",
+    # Prevent prefetch/prerender leaking data
+    "X-DNS-Prefetch-Control": "off",
+}
+
+# Content Security Policy - restrictive default
+# Customize based on your app's needs
+DEFAULT_CSP = (
+    "default-src 'self'; "
+    "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.jsdelivr.net; "  # Gradio needs this
+    "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+    "img-src 'self' data: blob: https:; "
+    "font-src 'self' https://cdn.jsdelivr.net; "
+    "connect-src 'self' ws: wss: https:; "
+    "frame-ancestors 'none'; "
+    "form-action 'self'; "
+    "base-uri 'self'; "
+    "upgrade-insecure-requests"
+)
+
+
+@dataclass
+class SecurityHeadersConfig:
+    """Configuration for security headers middleware."""
+
+    # Enable/disable individual headers
+    enable_hsts: bool = False  # Only enable if behind HTTPS
+    hsts_max_age: int = 31536000  # 1 year
+    enable_csp: bool = True
+    csp_policy: str = DEFAULT_CSP
+
+    # Custom headers to add/override
+    custom_headers: dict[str, str] = field(default_factory=dict)
+
+    # Headers to remove (e.g., "Server", "X-Powered-By")
+    remove_headers: list[str] = field(
+        default_factory=lambda: ["Server", "X-Powered-By"]
+    )
+
+
+def create_security_headers_middleware(
+    config: Optional[SecurityHeadersConfig] = None,
+):
+    """
+    Create an ASGI middleware that adds security headers.
+
+    Compatible with FastAPI, Starlette, and any ASGI app.
+
+    Args:
+        config: Security headers configuration
+
+    Returns:
+        ASGI middleware class
+
+    Usage:
+        from fastapi import FastAPI
+        from integradio.events.security import create_security_headers_middleware
+
+        app = FastAPI()
+        app.add_middleware(create_security_headers_middleware())
+    """
+    config = config or SecurityHeadersConfig()
+
+    class SecurityHeadersMiddleware:
+        def __init__(self, app):
+            self.app = app
+
+        async def __call__(self, scope, receive, send):
+            if scope["type"] != "http":
+                await self.app(scope, receive, send)
+                return
+
+            async def send_with_headers(message):
+                if message["type"] == "http.response.start":
+                    headers = dict(message.get("headers", []))
+
+                    # Add default security headers
+                    for key, value in DEFAULT_SECURITY_HEADERS.items():
+                        header_key = key.lower().encode()
+                        if header_key not in headers:
+                            headers[header_key] = value.encode()
+
+                    # Add HSTS if enabled
+                    if config.enable_hsts:
+                        headers[b"strict-transport-security"] = (
+                            f"max-age={config.hsts_max_age}; includeSubDomains"
+                        ).encode()
+
+                    # Add CSP if enabled
+                    if config.enable_csp:
+                        headers[b"content-security-policy"] = (
+                            config.csp_policy.encode()
+                        )
+
+                    # Add custom headers
+                    for key, value in config.custom_headers.items():
+                        headers[key.lower().encode()] = value.encode()
+
+                    # Remove unwanted headers
+                    for header in config.remove_headers:
+                        headers.pop(header.lower().encode(), None)
+
+                    # Rebuild headers list
+                    message = dict(message)
+                    message["headers"] = list(headers.items())
+
+                await send(message)
+
+            await self.app(scope, receive, send_with_headers)
+
+    return SecurityHeadersMiddleware
+
+
+def get_secure_gradio_config() -> dict[str, Any]:
+    """
+    Get recommended Gradio launch configuration for security.
+
+    Returns:
+        Dict of kwargs for gr.Blocks.launch()
+
+    Usage:
+        import gradio as gr
+        from integradio.events.security import get_secure_gradio_config
+
+        demo = gr.Blocks()
+        demo.launch(**get_secure_gradio_config())
+    """
+    return {
+        # Never use share=True in production
+        "share": False,
+        # Bind to localhost only by default (use reverse proxy for external access)
+        "server_name": "127.0.0.1",
+        # Enable queue for better handling of concurrent requests
+        "enable_queue": True,
+        # Show errors in development only
+        "show_error": False,
+        # Disable API docs in production
+        "show_api": False,
+        # Max file size (bytes) - 50MB default
+        "max_file_size": 50 * 1024 * 1024,
+    }
+
+
+def validate_gradio_version() -> tuple[bool, str]:
+    """
+    Check if the installed Gradio version is secure.
+
+    Returns:
+        (is_secure, message) tuple
+
+    Known vulnerable versions:
+    - < 3.34.0: CVE-2023-34239 (arbitrary file read, URL proxying)
+    - 4.0 - 4.10: CVE-2023-51449 (path traversal)
+    - 3.47 - 4.12: CVE-2024-1561 (API arbitrary file read)
+    - <= 4.37.2: CVE-2024-8021 (open redirect)
+    """
+    try:
+        import gradio as gr
+        version = gr.__version__
+    except ImportError:
+        return False, "Gradio not installed"
+
+    from packaging import version as pkg_version
+
+    current = pkg_version.parse(version)
+
+    # Minimum secure version is 5.0.0 (post-Trail of Bits audit)
+    min_secure = pkg_version.parse("5.0.0")
+
+    if current < min_secure:
+        return False, (
+            f"Gradio {version} has known security vulnerabilities. "
+            f"Please upgrade to 5.0.0 or later: pip install --upgrade gradio"
+        )
+
+    return True, f"Gradio {version} is up to date with security patches"

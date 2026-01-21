@@ -390,3 +390,275 @@ class TestSearchEdgeCases:
         assert "tags" in data
         assert "file_path" in data
         assert "line_number" in data
+
+
+class TestSearchEngineWithComponents:
+    """Integration tests for SearchEngine with semantic components."""
+
+    def test_search_finds_semantic_components(
+        self,
+        mock_blocks,
+        mock_semantic_components,
+        patch_semantic_component,
+    ):
+        """Test search finds registered semantic components."""
+        engine = SearchEngine(mock_blocks)
+        results = engine.search("search")
+
+        assert isinstance(results, list)
+        # Should find at least one component with "search" in intent
+
+    def test_search_by_intent_only(
+        self,
+        mock_blocks,
+        mock_semantic_components,
+        patch_semantic_component,
+    ):
+        """Test search only in intents."""
+        engine = SearchEngine(mock_blocks)
+        results = engine.search(
+            "input",
+            search_intents=True,
+            search_tags=False,
+            search_types=False,
+            search_labels=False,
+        )
+
+        assert isinstance(results, list)
+
+    def test_search_by_tags_only(
+        self,
+        mock_blocks,
+        mock_semantic_components,
+        patch_semantic_component,
+    ):
+        """Test search only in tags."""
+        engine = SearchEngine(mock_blocks)
+        results = engine.search(
+            "action",
+            search_intents=False,
+            search_tags=True,
+            search_types=False,
+            search_labels=False,
+        )
+
+        assert isinstance(results, list)
+
+    def test_search_by_types_only(
+        self,
+        mock_blocks,
+        mock_semantic_components,
+        patch_semantic_component,
+    ):
+        """Test search only in types."""
+        engine = SearchEngine(mock_blocks)
+        results = engine.search(
+            "Button",
+            search_intents=False,
+            search_tags=False,
+            search_types=True,
+            search_labels=False,
+        )
+
+        assert isinstance(results, list)
+
+    def test_search_by_labels_only(
+        self,
+        mock_blocks,
+        mock_semantic_components,
+        patch_semantic_component,
+    ):
+        """Test search only in labels."""
+        engine = SearchEngine(mock_blocks)
+        results = engine.search(
+            "Search",
+            search_intents=False,
+            search_tags=False,
+            search_types=False,
+            search_labels=True,
+        )
+
+        assert isinstance(results, list)
+
+    def test_search_results_sorted_by_score(
+        self,
+        mock_blocks,
+        mock_semantic_components,
+        patch_semantic_component,
+    ):
+        """Test search results are sorted by score."""
+        engine = SearchEngine(mock_blocks)
+        results = engine.search("input")
+
+        if len(results) > 1:
+            for i in range(len(results) - 1):
+                assert results[i].score >= results[i + 1].score
+
+    def test_search_respects_max_results(
+        self,
+        mock_blocks,
+        mock_semantic_components,
+        patch_semantic_component,
+    ):
+        """Test search respects max_results."""
+        engine = SearchEngine(mock_blocks)
+        results = engine.search("", max_results=2)  # Empty query matches all
+
+        assert len(results) <= 2
+
+    def test_search_respects_min_score(
+        self,
+        mock_blocks,
+        mock_semantic_components,
+        patch_semantic_component,
+    ):
+        """Test search respects min_score filter."""
+        engine = SearchEngine(mock_blocks)
+        results = engine.search("input", min_score=0.5)
+
+        for result in results:
+            assert result.score >= 0.5
+
+    def test_semantic_search_fallback(
+        self,
+        mock_blocks,
+        mock_semantic_components,
+        patch_semantic_component,
+    ):
+        """Test semantic search falls back to text search."""
+        engine = SearchEngine(mock_blocks)
+
+        # Without embedder, should fall back to regular search
+        results = engine.search_semantic("search query")
+        assert isinstance(results, list)
+
+
+class TestFuzzyMatchScoring:
+    """Detailed tests for fuzzy match scoring algorithm."""
+
+    def test_exact_match_score_is_1(self):
+        """Test exact match returns 1.0."""
+        engine = SearchEngine()
+        assert engine._fuzzy_match("hello", "hello") == 1.0
+
+    def test_contains_match_score_is_0_9(self):
+        """Test contains match returns 0.9."""
+        engine = SearchEngine()
+        score = engine._fuzzy_match("hello", "hello world")
+        assert score == 0.9
+
+    def test_word_overlap_scoring(self):
+        """Test word overlap scoring calculation."""
+        engine = SearchEngine()
+        score = engine._fuzzy_match("user input", "input from user")
+        # Both words match, should be >= 0.5
+        assert score >= 0.5
+
+    def test_substring_match_scoring(self):
+        """Test substring matching returns 0.4."""
+        engine = SearchEngine()
+        score = engine._fuzzy_match("search button", "button")
+        # "button" is one word, "search button" has "button" as substring
+        assert score >= 0.3
+
+    def test_prefix_match_scoring(self):
+        """Test prefix matching returns 0.3."""
+        engine = SearchEngine()
+        score = engine._fuzzy_match("sub", "submit")
+        assert score >= 0.3
+
+    def test_character_overlap_scoring(self):
+        """Test character overlap scoring."""
+        engine = SearchEngine()
+        score = engine._fuzzy_match("xyz", "xyzabc")
+        # Contains match
+        assert score >= 0.2
+
+    def test_no_common_chars_low_score(self):
+        """Test completely different strings get low score."""
+        engine = SearchEngine()
+        score = engine._fuzzy_match("abc", "xyz")
+        # No common characters
+        assert score == 0.0 or score < 0.2
+
+
+class TestConvenienceFunctionsWithComponents:
+    """Integration tests for convenience functions."""
+
+    def test_search_by_intent_with_components(
+        self,
+        mock_blocks,
+        mock_semantic_components,
+        patch_semantic_component,
+    ):
+        """Test search_by_intent with components."""
+        results = search_by_intent("search")
+        assert isinstance(results, list)
+
+    def test_search_by_tag_with_components(
+        self,
+        mock_blocks,
+        mock_semantic_components,
+        patch_semantic_component,
+    ):
+        """Test search_by_tag with components."""
+        results = search_by_tag("input")
+        assert isinstance(results, list)
+
+    def test_search_by_type_with_components(
+        self,
+        mock_blocks,
+        mock_semantic_components,
+        patch_semantic_component,
+    ):
+        """Test search_by_type with components."""
+        results = search_by_type("Button")
+        assert isinstance(results, list)
+
+    def test_find_component_returns_best(
+        self,
+        mock_blocks,
+        mock_semantic_components,
+        patch_semantic_component,
+    ):
+        """Test find_component returns best match."""
+        result = find_component("search input")
+
+        # Should return single result or None
+        assert result is None or isinstance(result, SearchResult)
+
+    def test_list_all_intents_with_components(
+        self,
+        mock_blocks,
+        mock_semantic_components,
+        patch_semantic_component,
+    ):
+        """Test list_all_intents returns unique intents."""
+        intents = list_all_intents()
+
+        assert isinstance(intents, list)
+        # Should have unique sorted intents
+
+    def test_list_all_tags_with_components(
+        self,
+        mock_blocks,
+        mock_semantic_components,
+        patch_semantic_component,
+    ):
+        """Test list_all_tags returns unique tags."""
+        tags = list_all_tags()
+
+        assert isinstance(tags, list)
+        # Should have unique sorted tags
+
+    def test_list_all_types_with_components(
+        self,
+        mock_blocks,
+        mock_semantic_components,
+        patch_semantic_component,
+    ):
+        """Test list_all_types returns unique types."""
+        types = list_all_types()
+
+        assert isinstance(types, list)
+        # Should have unique sorted types

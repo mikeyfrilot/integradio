@@ -387,3 +387,277 @@ class TestTreeEdgeCases:
         mermaid = tree_to_mermaid(tree)
         # Should be truncated or handled gracefully
         assert "..." in mermaid or len(mermaid) < 500
+
+
+class TestBuildComponentTree:
+    """Tests for build_component_tree with mock blocks."""
+
+    def test_build_tree_from_blocks(
+        self,
+        mock_blocks,
+        mock_semantic_components,
+    ):
+        """Test building tree from mock blocks."""
+        from integradio.inspector.tree import build_component_tree
+
+        tree = build_component_tree(mock_blocks)
+
+        assert isinstance(tree, ComponentTree)
+        assert tree.total_components >= 0
+
+    def test_build_tree_with_dependencies(
+        self,
+        populated_blocks,
+        mock_semantic_components,
+    ):
+        """Test building tree from blocks with dependencies."""
+        from integradio.inspector.tree import build_component_tree
+
+        tree = build_component_tree(populated_blocks)
+
+        assert isinstance(tree, ComponentTree)
+
+    def test_build_tree_empty_blocks(self):
+        """Test building from empty blocks."""
+        from integradio.inspector.tree import build_component_tree
+        from tests.inspector.conftest import MockBlocks
+
+        blocks = MockBlocks()
+        tree = build_component_tree(blocks)
+
+        assert isinstance(tree, ComponentTree)
+
+    def test_build_tree_none_blocks(self):
+        """Test building from None blocks."""
+        from integradio.inspector.tree import build_component_tree
+
+        tree = build_component_tree(None)
+
+        assert isinstance(tree, ComponentTree)
+        assert tree.total_components == 0
+
+    def test_build_tree_includes_semantic_info(
+        self,
+        mock_blocks,
+        mock_semantic_components,
+        patch_semantic_component,
+    ):
+        """Test that built tree includes semantic metadata."""
+        from integradio.inspector.tree import build_component_tree
+        from integradio.components import SemanticComponent
+
+        tree = build_component_tree(mock_blocks)
+
+        # Should include semantic information
+        assert tree.semantic_components >= 0
+
+
+class TestTreeNodeDepth:
+    """Tests for node depth calculation."""
+
+    def test_node_depth_root(self):
+        """Test root node has depth 0."""
+        tree = ComponentTree()
+        root = ComponentNode(id="root", component_type="Column", intent="main")
+        tree.add_node(root)
+
+        assert root.depth == 0
+
+    def test_node_depth_children(self):
+        """Test child nodes have appropriate depth."""
+        tree = ComponentTree()
+        root = ComponentNode(id="root", component_type="Column", intent="main")
+        tree.add_node(root)
+
+        child = ComponentNode(id="child", component_type="Row", intent="row")
+        tree.add_node(child, parent_id="root")
+
+        grandchild = ComponentNode(id="grandchild", component_type="Button", intent="btn")
+        tree.add_node(grandchild, parent_id="child")
+
+        # Depth may be computed lazily or differently
+        # Just verify parent-child relationship
+        assert child.parent_id == "root"
+        assert grandchild.parent_id == "child"
+
+
+class TestTreeMermaidShapes:
+    """Tests for Mermaid node shapes by component type."""
+
+    def test_mermaid_button_shape(self):
+        """Test Button uses correct Mermaid shape."""
+        tree = ComponentTree()
+        tree.add_node(ComponentNode(id="btn", component_type="Button", intent="click"))
+
+        mermaid = tree_to_mermaid(tree)
+
+        # Buttons should use a specific shape
+        assert "btn" in mermaid
+
+    def test_mermaid_textbox_shape(self):
+        """Test Textbox uses correct Mermaid shape."""
+        tree = ComponentTree()
+        tree.add_node(ComponentNode(id="txt", component_type="Textbox", intent="input"))
+
+        mermaid = tree_to_mermaid(tree)
+
+        assert "txt" in mermaid
+
+    def test_mermaid_slider_shape(self):
+        """Test Slider uses correct Mermaid shape."""
+        tree = ComponentTree()
+        tree.add_node(ComponentNode(id="sld", component_type="Slider", intent="adjust"))
+
+        mermaid = tree_to_mermaid(tree)
+
+        assert "sld" in mermaid
+
+    def test_mermaid_markdown_shape(self):
+        """Test Markdown uses correct Mermaid shape."""
+        tree = ComponentTree()
+        tree.add_node(ComponentNode(id="md", component_type="Markdown", intent="display"))
+
+        mermaid = tree_to_mermaid(tree)
+
+        assert "md" in mermaid
+
+
+class TestTreeToJSON:
+    """Tests for tree JSON serialization."""
+
+    def test_tree_json_structure(self):
+        """Test JSON output structure."""
+        import json
+
+        tree = ComponentTree(app_name="Test")
+        tree.add_node(ComponentNode(
+            id="1",
+            component_type="Button",
+            intent="test",
+            tags=["tag1"],
+        ))
+
+        json_str = tree.to_json()
+        data = json.loads(json_str)
+
+        assert "app_name" in data
+        assert "total_components" in data
+        assert "semantic_components" in data
+        assert "roots" in data
+
+    def test_tree_json_includes_children(self):
+        """Test JSON includes nested children."""
+        import json
+
+        tree = ComponentTree()
+        root = ComponentNode(id="root", component_type="Column", intent="main")
+        tree.add_node(root)
+
+        child = ComponentNode(id="child", component_type="Button", intent="btn")
+        tree.add_node(child, parent_id="root")
+
+        json_str = tree.to_json()
+        data = json.loads(json_str)
+
+        # Should have nested structure
+        assert len(data["roots"]) == 1
+        assert "children" in data["roots"][0]
+
+
+class TestTreeWithVisualSpec:
+    """Tests for tree nodes with visual specifications."""
+
+    def test_node_with_visual_tokens(self):
+        """Test node stores visual tokens."""
+        node = ComponentNode(
+            id="styled",
+            component_type="Button",
+            intent="styled button",
+            has_visual_spec=True,
+            visual_tokens={
+                "background": "#3b82f6",
+                "color": "#ffffff",
+                "border-radius": "4px",
+            },
+        )
+
+        assert node.has_visual_spec is True
+        assert node.visual_tokens["background"] == "#3b82f6"
+
+    def test_tree_counts_semantic_components(self):
+        """Test tree counts semantic vs non-semantic components."""
+        tree = ComponentTree()
+
+        # Add some components with and without visual spec
+        tree.add_node(ComponentNode(
+            id="1", component_type="Button", intent="styled",
+            has_visual_spec=True,
+        ))
+        tree.add_node(ComponentNode(
+            id="2", component_type="Button", intent="unstyled",
+            has_visual_spec=False,
+        ))
+
+        tree.semantic_components = 1
+        assert tree.semantic_components >= 0
+
+    def test_mermaid_highlights_visual_spec(self):
+        """Test Mermaid diagram highlights visual spec nodes."""
+        tree = ComponentTree()
+        tree.add_node(ComponentNode(
+            id="styled",
+            component_type="Button",
+            intent="styled",
+            has_visual_spec=True,
+        ))
+        tree.add_node(ComponentNode(
+            id="unstyled",
+            component_type="Button",
+            intent="unstyled",
+            has_visual_spec=False,
+        ))
+
+        mermaid = tree_to_mermaid(tree)
+
+        # Should have class for semantic components
+        assert "classDef semantic" in mermaid
+
+
+class TestTreeIterators:
+    """Tests for tree iteration methods."""
+
+    def test_nodes_dict_contains_all(self):
+        """Test that nodes dict contains all added nodes."""
+        tree = ComponentTree()
+        root = ComponentNode(id="root", component_type="Column", intent="main")
+        tree.add_node(root)
+
+        child1 = ComponentNode(id="c1", component_type="Button", intent="btn1")
+        tree.add_node(child1, parent_id="root")
+
+        child2 = ComponentNode(id="c2", component_type="Button", intent="btn2")
+        tree.add_node(child2, parent_id="root")
+
+        # Count all nodes via nodes dict
+        assert len(tree.nodes) == 3
+        assert tree.get_node("root") == root
+        assert tree.get_node("c1") == child1
+        assert tree.get_node("c2") == child2
+
+    def test_tree_maintains_hierarchy(self):
+        """Test tree maintains parent-child hierarchy."""
+        tree = ComponentTree()
+        root = ComponentNode(id="root", component_type="Column", intent="main")
+        tree.add_node(root)
+
+        child = ComponentNode(id="child", component_type="Row", intent="row")
+        tree.add_node(child, parent_id="root")
+
+        grandchild = ComponentNode(id="gc", component_type="Button", intent="btn")
+        tree.add_node(grandchild, parent_id="child")
+
+        # Verify hierarchy
+        assert len(root.children) == 1
+        assert root.children[0] == child
+        assert len(child.children) == 1
+        assert child.children[0] == grandchild

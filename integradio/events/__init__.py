@@ -37,8 +37,28 @@ from .security import (
     RateLimiter,
     ConnectionManager,
     validate_origin,
+    # Security headers (2026 additions)
+    SecurityHeadersConfig,
+    create_security_headers_middleware,
+    get_secure_gradio_config,
+    validate_gradio_version,
+    DEFAULT_SECURITY_HEADERS,
+    DEFAULT_CSP,
 )
 from .handlers import EventHandler, on_event
+
+# Import exceptions for convenience
+from ..exceptions import (
+    WebSocketError,
+    WebSocketConnectionError,
+    WebSocketAuthenticationError,
+    WebSocketTimeoutError,
+    WebSocketDisconnectedError,
+    EventSignatureError,
+    EventExpiredError,
+    RateLimitExceededError,
+    ReplayAttackError,
+)
 
 # Backwards compatibility alias
 MutantEvent = SemanticEvent
@@ -57,7 +77,24 @@ __all__ = [
     "RateLimiter",
     "ConnectionManager",
     "validate_origin",
+    # Security Headers (2026 additions)
+    "SecurityHeadersConfig",
+    "create_security_headers_middleware",
+    "get_secure_gradio_config",
+    "validate_gradio_version",
+    "DEFAULT_SECURITY_HEADERS",
+    "DEFAULT_CSP",
     # Handlers
     "EventHandler",
     "on_event",
+    # Exceptions (for consumers)
+    "WebSocketError",
+    "WebSocketConnectionError",
+    "WebSocketAuthenticationError",
+    "WebSocketTimeoutError",
+    "WebSocketDisconnectedError",
+    "EventSignatureError",
+    "EventExpiredError",
+    "RateLimitExceededError",
+    "ReplayAttackError",
 ]

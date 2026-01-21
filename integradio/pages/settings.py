@@ -166,11 +166,14 @@ def create_settings_panel(
 
                     with gr.Column(scale=3):
                         # Create appropriate input based on type
+                        # Note: Using show_label=False keeps label accessible to screen readers
+                        # while visually hiding it (label shown in left column instead)
                         if setting.type == "toggle":
                             components[key] = semantic(
                                 gr.Checkbox(
                                     value=setting.default,
-                                    label="",
+                                    label=setting.label,
+                                    show_label=False,
                                     elem_id=f"setting-{key}",
                                 ),
                                 intent=f"toggles {setting.label} on or off",
@@ -182,7 +185,8 @@ def create_settings_panel(
                                 gr.Dropdown(
                                     choices=setting.choices,
                                     value=setting.default,
-                                    label="",
+                                    label=setting.label,
+                                    show_label=False,
                                     elem_id=f"setting-{key}",
                                 ),
                                 intent=f"selects {setting.label} from options",
@@ -196,7 +200,8 @@ def create_settings_panel(
                                     maximum=setting.max_value,
                                     value=setting.default,
                                     step=setting.step,
-                                    label="",
+                                    label=setting.label,
+                                    show_label=False,
                                     elem_id=f"setting-{key}",
                                 ),
                                 intent=f"adjusts {setting.label} value",
@@ -209,7 +214,8 @@ def create_settings_panel(
                                     value=setting.default,
                                     minimum=setting.min_value,
                                     maximum=setting.max_value,
-                                    label="",
+                                    label=setting.label,
+                                    show_label=False,
                                     elem_id=f"setting-{key}",
                                 ),
                                 intent=f"sets {setting.label} numeric value",
@@ -220,7 +226,8 @@ def create_settings_panel(
                             components[key] = semantic(
                                 gr.ColorPicker(
                                     value=setting.default,
-                                    label="",
+                                    label=setting.label,
+                                    show_label=False,
                                     elem_id=f"setting-{key}",
                                 ),
                                 intent=f"picks color for {setting.label}",
@@ -231,7 +238,8 @@ def create_settings_panel(
                             components[key] = semantic(
                                 gr.Textbox(
                                     value=setting.default,
-                                    label="",
+                                    label=setting.label,
+                                    show_label=False,
                                     elem_id=f"setting-{key}",
                                 ),
                                 intent=f"enters text for {setting.label}",

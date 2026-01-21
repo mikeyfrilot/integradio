@@ -12,6 +12,12 @@ from pathlib import Path
 from typing import Optional, Any
 import numpy as np
 
+from .exceptions import (
+    RegistryDatabaseError,
+    ComponentNotFoundError,
+    ComponentRegistrationError,
+)
+
 logger = logging.getLogger(__name__)
 
 try:
@@ -85,7 +91,13 @@ class ComponentRegistry:
 
         # Initialize SQLite
         db_str = str(db_path) if db_path else ":memory:"
-        self._conn = sqlite3.connect(db_str, check_same_thread=False)
+        try:
+            self._conn = sqlite3.connect(db_str, check_same_thread=False)
+        except sqlite3.Error as e:
+            raise RegistryDatabaseError(
+                operation="connect",
+                cause=f"Cannot open database at '{db_str}': {e}",
+            ) from e
         self._init_db()
 
         # Initialize HNSW index
@@ -101,7 +113,11 @@ class ComponentRegistry:
             self._index = None
 
     def _init_db(self) -> None:
-        """Initialize SQLite schema."""
+        """Initialize SQLite schema.
+
+        Raises:
+            RegistryDatabaseError: If schema initialization fails
+        """
         try:
             self._conn.executescript("""
                 CREATE TABLE IF NOT EXISTS components (
@@ -131,8 +147,10 @@ class ComponentRegistry:
             """)
             self._conn.commit()
         except sqlite3.Error as e:
-            logger.error(f"Failed to initialize database schema: {e}")
-            raise
+            raise RegistryDatabaseError(
+                operation="schema_init",
+                cause=str(e),
+            ) from e
 
     def register(
         self,
@@ -189,11 +207,13 @@ class ComponentRegistry:
             self._conn.commit()
             return True
         except sqlite3.Error as e:
-            logger.error(f"Failed to register component {component_id}: {e}")
             # Rollback memory state on DB failure
             self._vectors.pop(component_id, None)
             self._metadata.pop(component_id, None)
-            return False
+            raise ComponentRegistrationError(
+                component_id=component_id,
+                cause=f"Database insert failed: {e}",
+            ) from e
 
     def add_relationship(
         self,
@@ -232,8 +252,10 @@ class ComponentRegistry:
                     self._metadata[target_id].inputs_from.append(source_id)
             return True
         except sqlite3.Error as e:
-            logger.error(f"Failed to add relationship {source_id}->{target_id}: {e}")
-            return False
+            raise RegistryDatabaseError(
+                operation=f"add_relationship({source_id}->{target_id})",
+                cause=str(e),
+            ) from e
 
     def search(
         self,
@@ -352,8 +374,10 @@ class ComponentRegistry:
 
             return relationships
         except sqlite3.Error as e:
-            logger.error(f"Failed to get relationships for component {component_id}: {e}")
-            return {}
+            raise RegistryDatabaseError(
+                operation=f"get_relationships({component_id})",
+                cause=str(e),
+            ) from e
 
     def get_dataflow(self, component_id: int) -> dict[str, Any]:
         """
@@ -422,12 +446,19 @@ class ComponentRegistry:
                     "type": rel_type,
                 })
         except sqlite3.Error as e:
-            logger.error(f"Failed to export graph relationships: {e}")
+            raise RegistryDatabaseError(
+                operation="export_graph",
+                cause=f"Failed to query relationships: {e}",
+            ) from e
 
         return {"nodes": nodes, "links": links}
 
     def clear(self) -> None:
-        """Clear all registered components."""
+        """Clear all registered components.
+
+        Raises:
+            RegistryDatabaseError: If database clear fails
+        """
         self._vectors.clear()
         self._metadata.clear()
         try:
@@ -437,7 +468,10 @@ class ComponentRegistry:
             """)
             self._conn.commit()
         except sqlite3.Error as e:
-            logger.error(f"Failed to clear database tables: {e}")
+            raise RegistryDatabaseError(
+                operation="clear",
+                cause=str(e),
+            ) from e
 
         if self._index is not None:
             self._index = hnswlib.Index(space="cosine", dim=self.dimension)

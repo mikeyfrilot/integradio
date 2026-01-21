@@ -17,6 +17,7 @@ import gradio as gr
 
 from ..components import semantic
 from ..blocks import SemanticBlocks
+from ..ux import create_skeleton, create_spinner
 
 
 @dataclass
@@ -111,9 +112,16 @@ def create_dashboard(
                 )
 
             components["refresh_btn"] = semantic(
-                gr.Button("🔄 Refresh", variant="secondary", size="sm"),
+                gr.Button("🔄 Refresh", variant="secondary"),
                 intent="refreshes all dashboard data",
                 tags=["action", "refresh"],
+            )
+
+            # Loading indicator for refresh (2026 UX best practice)
+            components["loading_indicator"] = gr.HTML(
+                "",
+                visible=False,
+                elem_id="dashboard-loading",
             )
 
     gr.Markdown("---")
@@ -193,7 +201,6 @@ def create_dashboard(
                     gr.Button(
                         f"{action.icon} {action.label}",
                         variant="secondary",
-                        size="sm",
                         elem_id=f"action-{action.action_id}",
                     ),
                     intent=f"quick action to {action.label.lower()}",
@@ -253,12 +260,32 @@ def create_dashboard(
                 tags=["action", "notifications"],
             )
 
-    # Wire up refresh
+    # Wire up refresh with loading state (2026 UX best practice)
+    def show_loading():
+        return gr.update(value=create_spinner("Refreshing dashboard..."), visible=True)
+
+    def hide_loading():
+        return gr.update(value="", visible=False)
+
     if on_refresh:
         kpi_outputs = [components[f"kpi_{i}"] for i in range(len(config.kpis))]
+
+        # Show loading first
         components["refresh_btn"].click(
+            fn=show_loading,
+            outputs=[components["loading_indicator"]],
+        ).then(
             fn=on_refresh,
             outputs=kpi_outputs + [components["activity_feed"]],
+        ).then(
+            fn=hide_loading,
+            outputs=[components["loading_indicator"]],
+        )
+    else:
+        # Default refresh animation even without handler
+        components["refresh_btn"].click(
+            fn=show_loading,
+            outputs=[components["loading_indicator"]],
         )
 
     # Wire up actions

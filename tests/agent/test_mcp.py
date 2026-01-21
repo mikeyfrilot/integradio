@@ -457,3 +457,416 @@ class TestCreateMCPServer:
         # Should still work for listing tools
         tools = server.list_tools()
         assert len(tools) >= 4
+
+
+class TestMCPWithSemanticComponents:
+    """Integration tests with mock SemanticComponent instances."""
+
+    def test_call_tool_find_component(
+        self,
+        mock_blocks,
+        mock_semantic_components,
+        patch_semantic_component,
+    ):
+        """Test calling find_component tool."""
+        server = MCPComponentServer(mock_blocks)
+
+        result = server.call_tool("find_component", {"query": "search"})
+
+        assert "content" in result
+        assert len(result["content"]) > 0
+        assert "text" in result["content"][0]
+
+    def test_call_tool_find_with_filters(
+        self,
+        mock_blocks,
+        mock_semantic_components,
+        patch_semantic_component,
+    ):
+        """Test find_component with filters."""
+        server = MCPComponentServer(mock_blocks)
+
+        result = server.call_tool("find_component", {
+            "intent": "search",
+            "tag": "input",
+            "interactive_only": True,
+            "visible_only": True,
+            "max_results": 5,
+        })
+
+        assert "content" in result
+
+    def test_call_tool_component_action_click(
+        self,
+        mock_blocks,
+        component_with_click,
+        patch_semantic_component,
+    ):
+        """Test calling component_action with click."""
+        component, semantic = component_with_click
+        server = MCPComponentServer(mock_blocks)
+
+        result = server.call_tool("component_action", {
+            "component_id": str(component._id),
+            "action": "click",
+        })
+
+        assert "content" in result
+
+    def test_call_tool_component_action_set_value(
+        self,
+        mock_blocks,
+        component_with_value,
+        patch_semantic_component,
+    ):
+        """Test calling component_action with set_value."""
+        component, semantic = component_with_value
+        server = MCPComponentServer(mock_blocks)
+
+        result = server.call_tool("component_action", {
+            "component_id": str(component._id),
+            "action": "set_value",
+            "value": "new value",
+        })
+
+        assert "content" in result
+
+    def test_call_tool_get_state(
+        self,
+        mock_blocks,
+        component_with_value,
+        patch_semantic_component,
+    ):
+        """Test calling get_state tool."""
+        component, semantic = component_with_value
+        server = MCPComponentServer(mock_blocks)
+
+        result = server.call_tool("get_state", {
+            "component_id": str(component._id),
+        })
+
+        assert "content" in result
+
+    def test_call_tool_get_state_with_visual_spec(
+        self,
+        mock_blocks,
+        component_with_visual_spec,
+        patch_semantic_component,
+    ):
+        """Test calling get_state with visual spec."""
+        component, semantic = component_with_visual_spec
+        server = MCPComponentServer(mock_blocks)
+
+        result = server.call_tool("get_state", {
+            "component_id": str(component._id),
+            "include_visual_spec": True,
+        })
+
+        assert "content" in result
+
+    def test_call_tool_trace_flow_forward(
+        self,
+        populated_blocks,
+        mock_semantic_components,
+    ):
+        """Test calling trace_flow forward."""
+        server = MCPComponentServer(populated_blocks)
+
+        result = server.call_tool("trace_flow", {
+            "component_id": "1",
+            "direction": "forward",
+        })
+
+        assert "content" in result
+
+    def test_call_tool_trace_flow_backward(
+        self,
+        populated_blocks,
+        mock_semantic_components,
+    ):
+        """Test calling trace_flow backward."""
+        server = MCPComponentServer(populated_blocks)
+
+        result = server.call_tool("trace_flow", {
+            "component_id": "3",
+            "direction": "backward",
+        })
+
+        assert "content" in result
+
+
+class TestMCPResources:
+    """Tests for MCP resource operations."""
+
+    def test_read_resource_intents(
+        self,
+        mock_blocks,
+        mock_semantic_components,
+        patch_semantic_component,
+    ):
+        """Test reading intents resource."""
+        server = MCPComponentServer(mock_blocks)
+
+        result = server.read_resource("ui://intents")
+
+        assert "contents" in result
+        assert len(result["contents"]) > 0
+
+    def test_read_resource_tags(
+        self,
+        mock_blocks,
+        mock_semantic_components,
+        patch_semantic_component,
+    ):
+        """Test reading tags resource."""
+        server = MCPComponentServer(mock_blocks)
+
+        result = server.read_resource("ui://tags")
+
+        assert "contents" in result
+        assert len(result["contents"]) > 0
+
+    def test_read_resource_tree(
+        self,
+        mock_blocks,
+        mock_semantic_components,
+    ):
+        """Test reading tree resource."""
+        import json
+
+        server = MCPComponentServer(mock_blocks)
+
+        result = server.read_resource("ui://tree")
+
+        assert "contents" in result
+        content = result["contents"][0]["text"]
+        # Should be valid JSON
+        parsed = json.loads(content)
+        assert isinstance(parsed, dict)
+
+    def test_read_resource_dataflow(
+        self,
+        mock_blocks,
+        mock_semantic_components,
+    ):
+        """Test reading dataflow resource."""
+        import json
+
+        server = MCPComponentServer(mock_blocks)
+
+        result = server.read_resource("ui://dataflow")
+
+        assert "contents" in result
+        content = result["contents"][0]["text"]
+        parsed = json.loads(content)
+        assert isinstance(parsed, dict)
+
+
+class TestMCPPromptsWithArgs:
+    """Tests for MCP prompt argument handling."""
+
+    def test_prompt_describe_with_component_id(
+        self,
+        mock_blocks,
+        component_with_value,
+        patch_semantic_component,
+    ):
+        """Test describe_component prompt with ID."""
+        component, semantic = component_with_value
+        server = MCPComponentServer(mock_blocks)
+
+        result = server.get_prompt("describe_component", {
+            "component_id": str(component._id),
+        })
+
+        assert "messages" in result
+        assert str(component._id) in result["messages"][0]["content"]["text"]
+
+    def test_prompt_trace_with_input_id(
+        self,
+        mock_blocks,
+        mock_semantic_components,
+    ):
+        """Test trace_from_input prompt with ID."""
+        server = MCPComponentServer(mock_blocks)
+
+        result = server.get_prompt("trace_from_input", {
+            "input_id": "123",
+        })
+
+        assert "messages" in result
+        assert "123" in result["messages"][0]["content"]["text"]
+
+
+class TestMCPJsonRPCComplete:
+    """Complete JSON-RPC integration tests."""
+
+    def test_full_workflow(
+        self,
+        mock_blocks,
+        mock_semantic_components,
+        patch_semantic_component,
+    ):
+        """Test complete MCP workflow."""
+        server = MCPComponentServer(mock_blocks)
+
+        # 1. Initialize
+        init_response = server.handle_request({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+        })
+        assert "result" in init_response
+
+        # 2. List tools
+        tools_response = server.handle_request({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/list",
+        })
+        assert "result" in tools_response
+        assert "tools" in tools_response["result"]
+
+        # 3. Call a tool
+        call_response = server.handle_request({
+            "jsonrpc": "2.0",
+            "id": 3,
+            "method": "tools/call",
+            "params": {
+                "name": "find_component",
+                "arguments": {"query": "button"},
+            },
+        })
+        assert "result" in call_response
+
+        # 4. List resources
+        resources_response = server.handle_request({
+            "jsonrpc": "2.0",
+            "id": 4,
+            "method": "resources/list",
+        })
+        assert "result" in resources_response
+        assert "resources" in resources_response["result"]
+
+        # 5. Read resource
+        read_response = server.handle_request({
+            "jsonrpc": "2.0",
+            "id": 5,
+            "method": "resources/read",
+            "params": {"uri": "ui://tree"},
+        })
+        assert "result" in read_response
+
+        # 6. Get prompt
+        prompt_response = server.handle_request({
+            "jsonrpc": "2.0",
+            "id": 6,
+            "method": "prompts/get",
+            "params": {"name": "find_interactive"},
+        })
+        assert "result" in prompt_response
+
+    def test_error_responses(self, mock_blocks):
+        """Test proper error responses."""
+        server = MCPComponentServer(mock_blocks)
+
+        # Unknown method
+        response = server.handle_request({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "unknown/method",
+        })
+        assert "error" in response
+        assert response["error"]["code"] == -32601
+
+        # Unknown tool
+        response = server.call_tool("unknown_tool")
+        assert response["isError"] is True
+
+        # Unknown resource
+        response = server.read_resource("ui://unknown")
+        assert "Unknown resource" in response["contents"][0]["text"]
+
+        # Unknown prompt
+        response = server.get_prompt("unknown_prompt")
+        assert "Unknown prompt" in response["messages"][0]["content"]["text"]
+
+
+class TestMCPProtocolCompliance:
+    """Tests for MCP protocol compliance."""
+
+    def test_response_jsonrpc_version(self, mock_blocks):
+        """Test responses include jsonrpc version."""
+        server = MCPComponentServer(mock_blocks)
+
+        response = server.handle_request({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+        })
+
+        assert response["jsonrpc"] == "2.0"
+
+    def test_response_id_preserved(self, mock_blocks):
+        """Test request ID is preserved in response."""
+        server = MCPComponentServer(mock_blocks)
+
+        # Numeric ID
+        response = server.handle_request({
+            "jsonrpc": "2.0",
+            "id": 42,
+            "method": "tools/list",
+        })
+        assert response["id"] == 42
+
+        # String ID
+        response = server.handle_request({
+            "jsonrpc": "2.0",
+            "id": "my-custom-id",
+            "method": "tools/list",
+        })
+        assert response["id"] == "my-custom-id"
+
+    def test_capabilities_structure(self, mock_blocks):
+        """Test server capabilities structure."""
+        server = MCPComponentServer(mock_blocks)
+        info = server.get_server_info()
+
+        assert "capabilities" in info
+        caps = info["capabilities"]
+
+        # Required capabilities
+        assert "tools" in caps
+        assert "resources" in caps
+        assert "prompts" in caps
+
+    def test_tool_definition_format(self, mock_blocks):
+        """Test tool definitions follow MCP format."""
+        server = MCPComponentServer(mock_blocks)
+        tools = server.list_tools()
+
+        for tool in tools:
+            assert "name" in tool
+            assert "description" in tool
+            assert "inputSchema" in tool
+            assert tool["inputSchema"]["type"] == "object"
+
+    def test_resource_definition_format(self, mock_blocks):
+        """Test resource definitions follow MCP format."""
+        server = MCPComponentServer(mock_blocks)
+        resources = server.list_resources()
+
+        for resource in resources:
+            assert "uri" in resource
+            assert "name" in resource
+            assert "mimeType" in resource
+
+    def test_prompt_definition_format(self, mock_blocks):
+        """Test prompt definitions follow MCP format."""
+        server = MCPComponentServer(mock_blocks)
+        prompts = server.list_prompts()
+
+        for prompt in prompts:
+            assert "name" in prompt
+            assert "description" in prompt
+            assert "arguments" in prompt

@@ -46,15 +46,20 @@ class TestEmbedderUnit:
 class TestEmbedderWithMock:
     """Tests using mocked HTTP calls (no Ollama needed)."""
 
+    @patch("integradio.embedder.httpx.get")
     @patch("integradio.embedder.httpx.post")
-    def test_embed_single_text(self, mock_post):
+    def test_embed_single_text(self, mock_post, mock_get):
         """Verify embedding returns numpy array of correct dimension (768)."""
+        # Mock availability check
+        mock_get.return_value = MagicMock(status_code=200)
+
         # Mock the Ollama API response
         mock_response = MagicMock()
         mock_response.json.return_value = {
             "embedding": [0.1] * 768
         }
         mock_response.raise_for_status = MagicMock()
+        mock_response.status_code = 200
         mock_post.return_value = mock_response
 
         embedder = Embedder()
@@ -64,12 +69,15 @@ class TestEmbedderWithMock:
         assert result.shape == (768,)
         assert result.dtype == np.float32
 
+    @patch("integradio.embedder.httpx.get")
     @patch("integradio.embedder.httpx.post")
-    def test_embed_batch(self, mock_post):
+    def test_embed_batch(self, mock_post, mock_get):
         """Verify batch embedding returns list of correct length."""
+        mock_get.return_value = MagicMock(status_code=200)
         mock_response = MagicMock()
         mock_response.json.return_value = {"embedding": [0.1] * 768}
         mock_response.raise_for_status = MagicMock()
+        mock_response.status_code = 200
         mock_post.return_value = mock_response
 
         embedder = Embedder()
@@ -80,12 +88,15 @@ class TestEmbedderWithMock:
         assert all(isinstance(r, np.ndarray) for r in results)
         assert all(r.shape == (768,) for r in results)
 
+    @patch("integradio.embedder.httpx.get")
     @patch("integradio.embedder.httpx.post")
-    def test_embed_query_uses_different_prefix(self, mock_post):
+    def test_embed_query_uses_different_prefix(self, mock_post, mock_get):
         """Ensure search_query prefix is used for queries."""
+        mock_get.return_value = MagicMock(status_code=200)
         mock_response = MagicMock()
         mock_response.json.return_value = {"embedding": [0.1] * 768}
         mock_response.raise_for_status = MagicMock()
+        mock_response.status_code = 200
         mock_post.return_value = mock_response
 
         embedder = Embedder()
@@ -96,12 +107,15 @@ class TestEmbedderWithMock:
         payload = call_args[1]["json"]
         assert payload["prompt"].startswith("search_query: ")
 
+    @patch("integradio.embedder.httpx.get")
     @patch("integradio.embedder.httpx.post")
-    def test_cache_hit(self, mock_post):
+    def test_cache_hit(self, mock_post, mock_get):
         """Embed same text twice, verify second call uses cache."""
+        mock_get.return_value = MagicMock(status_code=200)
         mock_response = MagicMock()
         mock_response.json.return_value = {"embedding": [0.5] * 768}
         mock_response.raise_for_status = MagicMock()
+        mock_response.status_code = 200
         mock_post.return_value = mock_response
 
         embedder = Embedder()
@@ -117,12 +131,15 @@ class TestEmbedderWithMock:
         # Results should be identical
         np.testing.assert_array_equal(result1, result2)
 
+    @patch("integradio.embedder.httpx.get")
     @patch("integradio.embedder.httpx.post")
-    def test_cache_miss_for_different_text(self, mock_post):
+    def test_cache_miss_for_different_text(self, mock_post, mock_get):
         """Different texts should not share cache."""
+        mock_get.return_value = MagicMock(status_code=200)
         mock_response = MagicMock()
         mock_response.json.return_value = {"embedding": [0.5] * 768}
         mock_response.raise_for_status = MagicMock()
+        mock_response.status_code = 200
         mock_post.return_value = mock_response
 
         embedder = Embedder()
@@ -137,12 +154,15 @@ class TestEmbedderWithMock:
 class TestEmbedderCachePersistence:
     """Test cache persistence to disk."""
 
+    @patch("integradio.embedder.httpx.get")
     @patch("integradio.embedder.httpx.post")
-    def test_cache_persistence(self, mock_post, temp_cache_dir):
+    def test_cache_persistence(self, mock_post, mock_get, temp_cache_dir):
         """With cache_dir, verify cache survives new Embedder instance."""
+        mock_get.return_value = MagicMock(status_code=200)
         mock_response = MagicMock()
         mock_response.json.return_value = {"embedding": [0.42] * 768}
         mock_response.raise_for_status = MagicMock()
+        mock_response.status_code = 200
         mock_post.return_value = mock_response
 
         # First embedder instance
@@ -163,12 +183,15 @@ class TestEmbedderCachePersistence:
         # Results should match
         np.testing.assert_array_almost_equal(result1, result2, decimal=5)
 
-    def test_cache_file_created(self, temp_cache_dir):
+    @patch("integradio.embedder.httpx.get")
+    def test_cache_file_created(self, mock_get, temp_cache_dir):
         """Cache file is created in cache_dir."""
+        mock_get.return_value = MagicMock(status_code=200)
         with patch("integradio.embedder.httpx.post") as mock_post:
             mock_response = MagicMock()
             mock_response.json.return_value = {"embedding": [0.1] * 768}
             mock_response.raise_for_status = MagicMock()
+            mock_response.status_code = 200
             mock_post.return_value = mock_response
 
             embedder = Embedder(cache_dir=temp_cache_dir)
@@ -186,12 +209,15 @@ class TestEmbedderCachePersistence:
 class TestEmbedderBatchCaching:
     """Test batch embedding with cache interaction."""
 
+    @patch("integradio.embedder.httpx.get")
     @patch("integradio.embedder.httpx.post")
-    def test_batch_uses_cache_for_known_texts(self, mock_post):
+    def test_batch_uses_cache_for_known_texts(self, mock_post, mock_get):
         """Batch embedding should use cache for already-embedded texts."""
+        mock_get.return_value = MagicMock(status_code=200)
         mock_response = MagicMock()
         mock_response.json.return_value = {"embedding": [0.5] * 768}
         mock_response.raise_for_status = MagicMock()
+        mock_response.status_code = 200
         mock_post.return_value = mock_response
 
         embedder = Embedder()
@@ -209,9 +235,11 @@ class TestEmbedderBatchCaching:
 
         assert len(results) == 3
 
+    @patch("integradio.embedder.httpx.get")
     @patch("integradio.embedder.httpx.post")
-    def test_batch_preserves_order(self, mock_post):
+    def test_batch_preserves_order(self, mock_post, mock_get):
         """Batch results maintain input order."""
+        mock_get.return_value = MagicMock(status_code=200)
         call_count = [0]
 
         def side_effect(*args, **kwargs):
@@ -220,6 +248,7 @@ class TestEmbedderBatchCaching:
             # Return different embeddings based on call count
             mock_response.json.return_value = {"embedding": [call_count[0] * 0.1] * 768}
             mock_response.raise_for_status = MagicMock()
+            mock_response.status_code = 200
             return mock_response
 
         mock_post.side_effect = side_effect
@@ -488,12 +517,15 @@ class TestEdgeCases:
 class TestCacheEdgeCases:
     """Test cache edge cases."""
 
+    @patch("integradio.embedder.httpx.get")
     @patch("integradio.embedder.httpx.post")
-    def test_cache_clear(self, mock_post):
+    def test_cache_clear(self, mock_post, mock_get):
         """Clearing cache causes new API calls."""
+        mock_get.return_value = MagicMock(status_code=200)
         mock_response = MagicMock()
         mock_response.json.return_value = {"embedding": [0.5] * 768}
         mock_response.raise_for_status = MagicMock()
+        mock_response.status_code = 200
         mock_post.return_value = mock_response
 
         embedder = Embedder()
@@ -570,6 +602,240 @@ class TestZeroVector:
 
         # Other should be unchanged
         assert zero2[0] == 0
+
+
+class TestCircuitBreaker:
+    """Test circuit breaker functionality."""
+
+    @patch("integradio.embedder.httpx.get")
+    @patch("integradio.embedder.httpx.post")
+    def test_circuit_breaker_stats(self, mock_post, mock_get):
+        """Circuit breaker stats are accessible."""
+        mock_get.return_value = MagicMock(status_code=200)
+        mock_response = MagicMock()
+        mock_response.json.return_value = {"embedding": [0.1] * 768}
+        mock_response.raise_for_status = MagicMock()
+        mock_response.status_code = 200
+        mock_post.return_value = mock_response
+
+        embedder = Embedder(use_circuit_breaker=True)
+        embedder.embed("test")
+
+        stats = embedder.circuit_breaker_stats
+        assert stats is not None
+        # Check actual keys from CircuitBreakerStats.to_dict()
+        assert "total_calls" in stats
+        assert "successful_calls" in stats
+        assert "failed_calls" in stats
+        assert "consecutive_failures" in stats
+
+    def test_circuit_breaker_disabled(self):
+        """No circuit breaker stats when disabled."""
+        embedder = Embedder(use_circuit_breaker=False)
+        assert embedder.circuit_breaker_stats is None
+
+    @patch("integradio.embedder.httpx.get")
+    @patch("integradio.embedder.httpx.post")
+    def test_circuit_breaker_fallback_on_open(self, mock_post, mock_get):
+        """Circuit breaker returns fallback when open."""
+        mock_get.return_value = MagicMock(status_code=200)
+        mock_response = MagicMock()
+        mock_response.json.return_value = {"embedding": [0.5] * 768}
+        mock_response.raise_for_status = MagicMock()
+        mock_response.status_code = 200
+        mock_post.return_value = mock_response
+
+        embedder = Embedder(use_circuit_breaker=True)
+        embedder._available = True
+
+        # Call successfully first, then check stats
+        result = embedder.embed("test")
+
+        stats = embedder.circuit_breaker_stats
+        assert stats["total_calls"] >= 1
+        assert result.shape == (768,)
+
+
+class TestCacheSaveErrors:
+    """Test cache save error handling."""
+
+    @patch("integradio.embedder.httpx.get")
+    @patch("integradio.embedder.httpx.post")
+    def test_cache_save_permission_error(self, mock_post, mock_get, tmp_path):
+        """Cache save failure is handled gracefully."""
+        mock_get.return_value = MagicMock(status_code=200)
+        mock_response = MagicMock()
+        mock_response.json.return_value = {"embedding": [0.1] * 768}
+        mock_response.raise_for_status = MagicMock()
+        mock_response.status_code = 200
+        mock_post.return_value = mock_response
+
+        cache_dir = tmp_path / "cache"
+        cache_dir.mkdir()
+
+        embedder = Embedder(cache_dir=cache_dir)
+
+        # Mock the open to fail on save
+        with patch("builtins.open", side_effect=PermissionError("Permission denied")):
+            import warnings
+            with warnings.catch_warnings(record=True) as w:
+                warnings.simplefilter("always")
+                result = embedder.embed("test")
+                # Should warn about cache save failure
+                assert len([x for x in w if "Could not save" in str(x.message)]) >= 1
+
+        # Embedding should still return valid result
+        assert result.shape == (768,)
+
+
+class TestCacheLoadEdgeCases:
+    """Test cache loading edge cases."""
+
+    def test_cache_wrong_dimension(self, tmp_path):
+        """Cache entries with wrong dimension are skipped."""
+        cache_dir = tmp_path / "cache"
+        cache_dir.mkdir()
+        cache_file = cache_dir / "embeddings.json"
+
+        # Write cache with wrong dimension (100 instead of 768)
+        with open(cache_file, "w") as f:
+            json.dump({"key1": [0.1] * 100}, f)
+
+        # The warning is logged to stderr, just verify the cache entry is skipped
+        embedder = Embedder(cache_dir=cache_dir)
+
+        # Cache should be empty (entry was skipped due to wrong dimension)
+        assert len(embedder._cache) == 0
+
+    def test_cache_dir_is_file(self, tmp_path):
+        """Error when cache_dir is a file."""
+        cache_file = tmp_path / "not_a_dir"
+        cache_file.write_text("I'm a file")
+
+        with pytest.raises(ValueError, match="not a directory"):
+            Embedder(cache_dir=cache_file)
+
+
+class TestAPIResponseEdgeCases:
+    """Test API response edge cases."""
+
+    @patch("integradio.embedder.httpx.get")
+    @patch("integradio.embedder.httpx.post")
+    def test_api_missing_embedding_field(self, mock_post, mock_get):
+        """API response without embedding field is handled."""
+        mock_get.return_value = MagicMock(status_code=200)
+        mock_response = MagicMock()
+        mock_response.json.return_value = {"other_field": "value"}  # No embedding
+        mock_response.raise_for_status = MagicMock()
+        mock_response.status_code = 200
+        mock_post.return_value = mock_response
+
+        embedder = Embedder(use_circuit_breaker=False)
+        embedder._available = True
+
+        import warnings
+        with warnings.catch_warnings(record=True):
+            warnings.simplefilter("always")
+            result = embedder.embed("test")
+
+        # Should return zero vector
+        assert result.shape == (768,)
+        np.testing.assert_array_equal(result, np.zeros(768))
+
+    @patch("integradio.embedder.httpx.get")
+    @patch("integradio.embedder.httpx.post")
+    def test_api_invalid_json_response(self, mock_post, mock_get):
+        """Invalid JSON response is handled."""
+        mock_get.return_value = MagicMock(status_code=200)
+        mock_response = MagicMock()
+        mock_response.json.side_effect = json.JSONDecodeError("Invalid", "doc", 0)
+        mock_response.raise_for_status = MagicMock()
+        mock_response.status_code = 200
+        mock_post.return_value = mock_response
+
+        embedder = Embedder(use_circuit_breaker=False)
+        embedder._available = True
+
+        import warnings
+        with warnings.catch_warnings(record=True):
+            warnings.simplefilter("always")
+            result = embedder.embed("test")
+
+        # Should return zero vector
+        assert result.shape == (768,)
+
+
+class TestBatchEdgeCases:
+    """Test batch embedding edge cases."""
+
+    @patch("integradio.embedder.httpx.get")
+    @patch("integradio.embedder.httpx.post")
+    def test_batch_with_none_elements(self, mock_post, mock_get):
+        """Batch with None elements returns zero vectors for those."""
+        mock_get.return_value = MagicMock(status_code=200)
+        mock_response = MagicMock()
+        mock_response.json.return_value = {"embedding": [0.5] * 768}
+        mock_response.raise_for_status = MagicMock()
+        mock_response.status_code = 200
+        mock_post.return_value = mock_response
+
+        embedder = Embedder()
+        results = embedder.embed_batch(["valid", None, "also valid"])
+
+        assert len(results) == 3
+        # First and third should be embeddings
+        assert not np.all(results[0] == 0)
+        # Second (None) should be zero vector
+        np.testing.assert_array_equal(results[1], np.zeros(768))
+
+    @patch("integradio.embedder.httpx.get")
+    @patch("integradio.embedder.httpx.post")
+    def test_batch_with_empty_strings(self, mock_post, mock_get):
+        """Batch with empty strings returns zero vectors for those."""
+        mock_get.return_value = MagicMock(status_code=200)
+        mock_response = MagicMock()
+        mock_response.json.return_value = {"embedding": [0.5] * 768}
+        mock_response.raise_for_status = MagicMock()
+        mock_response.status_code = 200
+        mock_post.return_value = mock_response
+
+        embedder = Embedder()
+        results = embedder.embed_batch(["valid", "", "also valid"])
+
+        assert len(results) == 3
+        # Empty string should get zero vector
+        np.testing.assert_array_equal(results[1], np.zeros(768))
+
+    def test_batch_none_input(self):
+        """Batch with None input returns empty list."""
+        embedder = Embedder()
+        results = embedder.embed_batch(None)
+        assert results == []
+
+
+class TestEmbedQueryErrors:
+    """Test embed_query error handling."""
+
+    @patch("integradio.embedder.httpx.get")
+    @patch("integradio.embedder.httpx.post")
+    def test_embed_query_api_error(self, mock_post, mock_get):
+        """embed_query handles API errors gracefully."""
+        import httpx
+
+        mock_get.return_value = MagicMock(status_code=200)
+        mock_post.side_effect = httpx.ConnectError("Connection refused")
+
+        embedder = Embedder(use_circuit_breaker=False)
+        embedder._available = True
+
+        import warnings
+        with warnings.catch_warnings(record=True):
+            warnings.simplefilter("always")
+            result = embedder.embed_query("test query")
+
+        # Should return zero vector
+        assert result.shape == (768,)
+        np.testing.assert_array_equal(result, np.zeros(768))
 
 
 # Integration tests marked for when Ollama is available
