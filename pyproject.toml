@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "integradio"
-version = "0.3.0"
+version = "0.3.1"
 description = "Vector-embedded Gradio components for semantic codebase navigation"
 readme = "README.md"
 license = "MIT"
@@ -64,11 +64,11 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/mcp-tool-shop/integradio"
-Documentation = "https://github.com/mcp-tool-shop/integradio#readme"
-Repository = "https://github.com/mcp-tool-shop/integradio.git"
-Issues = "https://github.com/mcp-tool-shop/integradio/issues"
-Changelog = "https://github.com/mcp-tool-shop/integradio/blob/main/CHANGELOG.md"
+Homepage = "https://github.com/mcp-tool-shop-org/integradio"
+Documentation = "https://github.com/mcp-tool-shop-org/integradio#readme"
+Repository = "https://github.com/mcp-tool-shop-org/integradio.git"
+Issues = "https://github.com/mcp-tool-shop-org/integradio/issues"
+Changelog = "https://github.com/mcp-tool-shop-org/integradio/blob/main/CHANGELOG.md"
 
 [tool.setuptools.packages.find]
 where = ["."]
