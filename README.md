@@ -1,10 +1,18 @@
+<div align="center">
+
+<img src="logo.png" alt="Integradio Logo" width="120">
+
 # Integradio
 
-[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Gradio 4.0+](https://img.shields.io/badge/gradio-4.0+-orange.svg)](https://gradio.app/)
+**Vector-embedded Gradio components for semantic codebase navigation**
 
-Vector-embedded Gradio components for semantic codebase navigation.
+<a href="https://pypi.org/project/integradio/"><img src="https://img.shields.io/pypi/v/integradio?style=flat-square&logo=pypi&logoColor=white" alt="PyPI"></a>
+<img src="https://img.shields.io/badge/python-3.10%2B-blue?style=flat-square&logo=python&logoColor=white" alt="Python 3.10+">
+<a href="https://gradio.app/"><img src="https://img.shields.io/badge/gradio-4.0%2B-orange?style=flat-square" alt="Gradio 4.0+"></a>
+<a href="LICENSE"><img src="https://img.shields.io/github/license/mcp-tool-shop-org/integradio?style=flat-square" alt="License"></a>
+
+</div>
+
 
 ## Overview
 
@@ -17,6 +25,15 @@ Integradio extends [Gradio](https://gradio.app/) with semantic search capabiliti
 - Multiple visualization formats (Mermaid, D3.js, ASCII)
 - 10 pre-built page templates
 - FastAPI integration for programmatic access
+
+## Why Integradio?
+
+| Problem | Solution |
+|---------|----------|
+| Gradio components are opaque to AI agents | Semantic intents make every widget discoverable |
+| Building dashboards from scratch every time | 10 pre-built page templates, ready to customize |
+| No programmatic access to component graphs | FastAPI routes + D3.js / Mermaid visualization |
+| Embedding logic scattered across your app | One wrapper, automatic vector storage |
 
 ## Requirements
 
@@ -311,3 +328,13 @@ Contributions welcome! Please read our contributing guidelines and submit PRs.
 - [Gradio Documentation](https://gradio.app/docs/)
 - [Ollama](https://ollama.ai/)
 - [nomic-embed-text](https://ollama.ai/library/nomic-embed-text)
+
+---
+
+<div align="center">
+
+Part of [**MCP Tool Shop**](https://mcp-tool-shop.github.io/)
+
+**[Documentation](https://github.com/mcp-tool-shop-org/integradio#readme)** • **[Issues](https://github.com/mcp-tool-shop-org/integradio/issues)**
+
+</div>

@@ -4,16 +4,16 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "integradio"
-version = "0.3.1"
+version = "0.3.2"
 description = "Vector-embedded Gradio components for semantic codebase navigation"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.10"
 authors = [
-    {name = "AI Development Lab"}
+    {name = "mcp-tool-shop", email = "64996768+mcp-tool-shop@users.noreply.github.com"}
 ]
 maintainers = [
-    {name = "AI Development Lab"}
+    {name = "mcp-tool-shop", email = "64996768+mcp-tool-shop@users.noreply.github.com"}
 ]
 keywords = [
     "gradio",
